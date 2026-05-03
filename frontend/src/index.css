@@ -1,0 +1,72 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+  font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+  background: #06070a;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.035), transparent 220px),
+    linear-gradient(135deg, rgba(20, 184, 166, 0.08), transparent 36%),
+    linear-gradient(225deg, rgba(245, 158, 11, 0.065), transparent 42%),
+    linear-gradient(90deg, rgba(39, 39, 42, 0.16) 1px, transparent 1px),
+    #06070a;
+  background-size: auto, auto, auto, 96px 96px, auto;
+  color: #f7f7fb;
+  text-rendering: optimizeLegibility;
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+}
+
+button:focus-visible,
+a:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible {
+  outline: 2px solid #2dd4bf;
+  outline-offset: 2px;
+}
+
+::selection {
+  background: rgba(45, 212, 191, 0.28);
+  color: #ffffff;
+}
+
+* {
+  scrollbar-color: rgba(45, 212, 191, 0.35) rgba(255, 255, 255, 0.06);
+}
+
+::-webkit-scrollbar {
+  height: 10px;
+  width: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(45, 212, 191, 0.32);
+  border: 2px solid rgba(6, 7, 10, 0.9);
+  border-radius: 999px;
+}
+
+audio {
+  color-scheme: dark;
+}
+
+input[type="range"] {
+  accent-color: #5eead4;
+}
