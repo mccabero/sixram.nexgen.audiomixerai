@@ -1,8 +1,10 @@
-import { ArrowLeft, Archive, Download, FileAudio, Gauge, RefreshCw, ShieldCheck, Sparkles, TriangleAlert } from "lucide-react";
+import { ArrowLeft, Archive, Download, FileAudio, Gauge, RefreshCw, ShieldCheck, Sparkles, Trash2, TriangleAlert } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import {
   createProjectBackup,
+  deleteExports,
+  deleteMasters,
   exportInstrumental,
   exportMixWithoutMastering,
   getProcessingJob,
@@ -251,6 +253,38 @@ export default function ExportPage() {
     }
   };
 
+  const removeMasters = async () => {
+    if (!window.confirm("Delete all master files and reports? Mix versions and original stems are kept.")) return;
+    setActionLoading("deleteMasters");
+    setError("");
+    setNotice("");
+    try {
+      setProject(await deleteMasters(projectId));
+      setLatestMaster(null);
+      setCompareA("");
+      setCompareB("");
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setActionLoading("");
+    }
+  };
+
+  const removeExports = async () => {
+    if (!window.confirm("Delete exported mix, instrumental, and backup files? Masters and original stems are kept.")) return;
+    setActionLoading("deleteExports");
+    setError("");
+    setNotice("");
+    try {
+      setProject(await deleteExports(projectId));
+      setLatestExport(null);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setActionLoading("");
+    }
+  };
+
   if (loading) {
     return <ProcessingPanel title="Loading Export" message="Reading mix versions, mastering settings, and previous masters." />;
   }
@@ -281,6 +315,10 @@ export default function ExportPage() {
           <Button type="button" onClick={runMaster} disabled={!selectedMixId || actionLoading === "master" || masterRunning}>
             <Sparkles size={17} />
             Generate Master
+          </Button>
+          <Button type="button" variant="danger" onClick={removeMasters} disabled={!masterVersions.length || actionLoading === "deleteMasters" || masterRunning}>
+            <Trash2 size={17} />
+            Delete Masters
           </Button>
         </div>
       </div>
@@ -393,7 +431,7 @@ export default function ExportPage() {
 
           <section className="mt-6 grid gap-5 xl:grid-cols-[1.05fr_0.95fr]">
             <ComparisonPanel options={comparisonOptions} compareA={compareA} compareB={compareB} setCompareA={setCompareA} setCompareB={setCompareB} selectedA={selectedA} selectedB={selectedB} />
-            <ExportFilesPanel exportFiles={exportFiles} latestExport={latestExport} includeOriginals={includeOriginals} setIncludeOriginals={setIncludeOriginals} runBackup={runBackup} backupBusy={actionLoading === "backup"} />
+            <ExportFilesPanel exportFiles={exportFiles} latestExport={latestExport} includeOriginals={includeOriginals} setIncludeOriginals={setIncludeOriginals} runBackup={runBackup} onDeleteExports={removeExports} backupBusy={actionLoading === "backup"} deleteBusy={actionLoading === "deleteExports"} />
           </section>
         </>
       )}
@@ -557,7 +595,7 @@ function CompareSlot({ label, options, selected, onChange, item, variant }) {
   );
 }
 
-function ExportFilesPanel({ exportFiles, latestExport, includeOriginals, setIncludeOriginals, runBackup, backupBusy }) {
+function ExportFilesPanel({ exportFiles, latestExport, includeOriginals, setIncludeOriginals, runBackup, onDeleteExports, backupBusy, deleteBusy }) {
   const files = latestExport ? [latestExport, ...exportFiles.filter((file) => file.id !== latestExport.id)] : exportFiles;
   return (
     <div className="rounded-lg border border-white/10 bg-white/[0.04] p-4">
@@ -566,10 +604,16 @@ function ExportFilesPanel({ exportFiles, latestExport, includeOriginals, setIncl
           <h2 className="font-semibold text-white">Exports & Backup</h2>
           <p className="mt-1 text-sm text-zinc-400">Save unmastered mixes, instrumental-ready mixes, and project backups.</p>
         </div>
-        <Button type="button" variant="secondary" onClick={runBackup} disabled={backupBusy}>
-          <Archive size={17} />
-          Backup ZIP
-        </Button>
+        <div className="flex flex-col gap-2 sm:flex-row">
+          <Button type="button" variant="secondary" onClick={runBackup} disabled={backupBusy}>
+            <Archive size={17} />
+            Backup ZIP
+          </Button>
+          <Button type="button" variant="danger" onClick={onDeleteExports} disabled={!files.length || deleteBusy}>
+            <Trash2 size={17} />
+            Delete Exports
+          </Button>
+        </div>
       </div>
       <label className="mt-4 inline-flex items-center gap-2 text-sm text-zinc-300">
         <input type="checkbox" checked={includeOriginals} onChange={(event) => setIncludeOriginals(event.target.checked)} className="h-4 w-4 rounded border-white/20 bg-black/30 accent-teal-300" />
@@ -661,6 +705,8 @@ function actionPanelFor(actionLoading, masterJob) {
   if (actionLoading === "exportMix") return { title: "Exporting Mix", message: "Writing selected mix to the chosen format." };
   if (actionLoading === "instrumental") return { title: "Exporting Instrumental", message: "Writing the vocal-free selected mix." };
   if (actionLoading === "backup") return { title: "Creating Backup", message: "Packaging project metadata, reports, logs, and exports." };
+  if (actionLoading === "deleteMasters") return { title: "Deleting Masters", message: "Removing master files and loudness reports." };
+  if (actionLoading === "deleteExports") return { title: "Deleting Exports", message: "Removing exported mixes, instrumentals, and backup ZIPs." };
   return null;
 }
 

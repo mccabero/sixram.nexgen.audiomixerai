@@ -6,6 +6,7 @@ from .audio_engine import check_audio_environment
 from .config import MAX_UPLOAD_MB, STEM_TYPES, STORAGE_ROOT
 from .models import (
     CreateProjectRequest,
+    CreateVocalPresetRequest,
     ExportFile,
     ExportMixRequest,
     GenerateMasterRequest,
@@ -29,7 +30,20 @@ from .models import (
     validate_stem_type,
 )
 from .cleaning import create_cleaning_job, run_cleaning_job, update_stem_cleaning_settings
-from .vocal_enhancer import create_vocal_enhancement_job, get_vocal_enhancer_presets, run_vocal_enhancement_job, update_vocal_enhancement_settings
+from .vocal_enhancer import (
+    analyze_project_vocals,
+    apply_all_vocal_recommendations,
+    apply_vocal_doctor_fix,
+    apply_vocal_recommendation,
+    create_vocal_enhancement_job,
+    create_custom_vocal_preset,
+    delete_custom_vocal_preset,
+    get_vocal_enhancer_presets,
+    list_custom_vocal_presets,
+    run_vocal_quality_doctor,
+    run_vocal_enhancement_job,
+    update_vocal_enhancement_settings,
+)
 from .phase2 import (
     apply_auto_balance,
     create_analysis_job,
@@ -67,7 +81,18 @@ from .stem_detection import (
     get_detection_memory_summary,
     learn_stem_type_correction,
 )
-from .storage import abandon_processing_job, create_project, delete_stem, get_project, list_projects, mark_interrupted_jobs, read_project_logs, save_uploaded_stems, update_project, update_stem_type
+from .storage import abandon_processing_job, create_project, delete_project, delete_stem, get_project, list_projects, mark_interrupted_jobs, read_project_logs, save_uploaded_stems, update_project, update_stem_type
+from .workflow_reset import (
+    delete_analysis_results,
+    delete_auto_balance,
+    delete_cleaned_stems,
+    delete_exports,
+    delete_masters,
+    delete_mix_versions,
+    delete_rough_mix,
+    delete_stem_detections,
+    delete_vocal_enhancements,
+)
 
 
 app = FastAPI(title="Local Stem Mixer AI", version="0.1.0")
@@ -156,6 +181,11 @@ def api_update_project(project_id: str, payload: UpdateProjectRequest) -> Projec
     return update_project(project_id, payload)
 
 
+@app.delete("/api/projects/{project_id}")
+def api_delete_project(project_id: str) -> dict[str, str]:
+    return delete_project(project_id)
+
+
 @app.post("/api/projects/{project_id}/stems", response_model=UploadResponse)
 async def api_upload_stems(project_id: str, files: list[UploadFile] = File(...)) -> UploadResponse:
     uploaded, errors = await save_uploaded_stems(project_id, files)
@@ -203,6 +233,21 @@ def api_start_analysis(project_id: str, background_tasks: BackgroundTasks) -> Pr
     return job
 
 
+@app.delete("/api/projects/{project_id}/analysis-results", response_model=Project)
+def api_delete_analysis_results(project_id: str) -> Project:
+    return delete_analysis_results(project_id)
+
+
+@app.delete("/api/projects/{project_id}/stem-detections", response_model=Project)
+def api_delete_stem_detections(project_id: str) -> Project:
+    return delete_stem_detections(project_id)
+
+
+@app.delete("/api/projects/{project_id}/auto-balance", response_model=Project)
+def api_delete_auto_balance(project_id: str) -> Project:
+    return delete_auto_balance(project_id)
+
+
 @app.patch("/api/projects/{project_id}/stems/{stem_id}/cleaning", response_model=Stem)
 def api_update_cleaning_settings(project_id: str, stem_id: str, payload: UpdateCleaningSettingsRequest) -> Stem:
     return update_stem_cleaning_settings(project_id, stem_id, payload)
@@ -215,9 +260,29 @@ def api_start_cleaning(project_id: str, background_tasks: BackgroundTasks) -> Pr
     return job
 
 
+@app.delete("/api/projects/{project_id}/cleaned-stems", response_model=Project)
+def api_delete_cleaned_stems(project_id: str) -> Project:
+    return delete_cleaned_stems(project_id)
+
+
 @app.get("/api/vocal-enhancer-presets")
 def api_get_vocal_enhancer_presets() -> dict[str, list[str]]:
     return get_vocal_enhancer_presets()
+
+
+@app.get("/api/vocal-custom-presets")
+def api_list_custom_vocal_presets() -> dict[str, list[dict]]:
+    return list_custom_vocal_presets()
+
+
+@app.post("/api/vocal-custom-presets")
+def api_create_custom_vocal_preset(payload: CreateVocalPresetRequest) -> dict:
+    return create_custom_vocal_preset(payload)
+
+
+@app.delete("/api/vocal-custom-presets/{preset_id}")
+def api_delete_custom_vocal_preset(preset_id: str) -> dict[str, str]:
+    return delete_custom_vocal_preset(preset_id)
 
 
 @app.patch("/api/projects/{project_id}/stems/{stem_id}/vocal-enhancement", response_model=Stem)
@@ -225,11 +290,41 @@ def api_update_vocal_enhancement_settings(project_id: str, stem_id: str, payload
     return update_vocal_enhancement_settings(project_id, stem_id, payload)
 
 
+@app.post("/api/projects/{project_id}/analyze-vocals", response_model=Project)
+def api_analyze_project_vocals(project_id: str) -> Project:
+    return analyze_project_vocals(project_id)
+
+
+@app.post("/api/projects/{project_id}/stems/{stem_id}/apply-vocal-recommendation", response_model=Stem)
+def api_apply_vocal_recommendation(project_id: str, stem_id: str) -> Stem:
+    return apply_vocal_recommendation(project_id, stem_id)
+
+
+@app.post("/api/projects/{project_id}/apply-vocal-recommendations", response_model=Project)
+def api_apply_all_vocal_recommendations(project_id: str) -> Project:
+    return apply_all_vocal_recommendations(project_id)
+
+
+@app.post("/api/projects/{project_id}/vocal-quality-doctor", response_model=Project)
+def api_run_vocal_quality_doctor(project_id: str) -> Project:
+    return run_vocal_quality_doctor(project_id)
+
+
+@app.post("/api/projects/{project_id}/stems/{stem_id}/apply-vocal-doctor-fix", response_model=Project)
+def api_apply_vocal_doctor_fix(project_id: str, stem_id: str) -> Project:
+    return apply_vocal_doctor_fix(project_id, stem_id)
+
+
 @app.post("/api/projects/{project_id}/enhance-vocals", response_model=ProcessingJob)
 def api_start_vocal_enhancement(project_id: str, background_tasks: BackgroundTasks) -> ProcessingJob:
     job = create_vocal_enhancement_job(project_id)
     background_tasks.add_task(run_vocal_enhancement_job, project_id, job.id)
     return job
+
+
+@app.delete("/api/projects/{project_id}/vocal-enhancements", response_model=Project)
+def api_delete_vocal_enhancements(project_id: str) -> Project:
+    return delete_vocal_enhancements(project_id)
 
 
 @app.get("/api/projects/{project_id}/jobs/{job_id}", response_model=ProcessingJob)
@@ -272,6 +367,11 @@ def api_generate_rough_mix(project_id: str) -> RoughMixResponse:
     return generate_rough_mix_preview(project_id)
 
 
+@app.delete("/api/projects/{project_id}/rough-mix", response_model=Project)
+def api_delete_rough_mix(project_id: str) -> Project:
+    return delete_rough_mix(project_id)
+
+
 @app.post("/api/projects/{project_id}/advanced-mix", response_model=MixVersion)
 def api_generate_advanced_mix(project_id: str) -> MixVersion:
     return generate_advanced_mix_preview(project_id)
@@ -306,6 +406,11 @@ def api_delete_mix_version(project_id: str, version_id: str) -> dict[str, str]:
     return delete_mix_version(project_id, version_id)
 
 
+@app.delete("/api/projects/{project_id}/mix-versions", response_model=Project)
+def api_delete_mix_versions(project_id: str) -> Project:
+    return delete_mix_versions(project_id)
+
+
 @app.patch("/api/projects/{project_id}/mastering-controls", response_model=Project)
 def api_update_mastering_controls(project_id: str, payload: UpdateMasteringControlsRequest) -> Project:
     return update_mastering_controls(project_id, payload)
@@ -336,3 +441,13 @@ def api_export_instrumental(project_id: str, payload: ExportMixRequest) -> Expor
 @app.post("/api/projects/{project_id}/exports/backup", response_model=ExportFile)
 def api_create_project_backup(project_id: str, payload: ProjectBackupRequest) -> ExportFile:
     return create_project_backup(project_id, payload)
+
+
+@app.delete("/api/projects/{project_id}/masters", response_model=Project)
+def api_delete_masters(project_id: str) -> Project:
+    return delete_masters(project_id)
+
+
+@app.delete("/api/projects/{project_id}/exports", response_model=Project)
+def api_delete_exports(project_id: str) -> Project:
+    return delete_exports(project_id)

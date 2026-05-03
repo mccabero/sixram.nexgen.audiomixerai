@@ -1,7 +1,7 @@
-import { ArrowLeft, CheckCircle2, Eraser, Gauge, Power, RefreshCw, SlidersHorizontal, Sparkles } from "lucide-react";
+import { ArrowLeft, CheckCircle2, Eraser, Gauge, Power, RefreshCw, SlidersHorizontal, Sparkles, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { getProcessingJob, getProject, startCleaning, updateCleaningSettings } from "../api.js";
+import { deleteCleanedStems, getProcessingJob, getProject, startCleaning, updateCleaningSettings } from "../api.js";
 import Button from "../components/Button.jsx";
 import EmptyState from "../components/EmptyState.jsx";
 import ProcessingPanel from "../components/ProcessingPanel.jsx";
@@ -96,6 +96,19 @@ export default function CleaningPage() {
     }
   };
 
+  const removeCleanedStems = async () => {
+    if (!window.confirm("Delete cleaned stem files and downstream vocal/mix/master outputs? Original stems and cleaning settings are kept.")) return;
+    setActionLoading("deleteCleaned");
+    setError("");
+    try {
+      setProject(await deleteCleanedStems(projectId));
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setActionLoading("");
+    }
+  };
+
   const updateStemCleaning = async (stem, updates) => {
     const current = cleaningSettings(stem);
     const nextUpdates = { ...updates };
@@ -130,9 +143,11 @@ export default function CleaningPage() {
       ? { title: "Refreshing Cleaning", message: "Reading the latest cleaning metadata." }
       : actionLoading === "clean"
         ? { title: "Starting Cleaning", message: "Creating the local cleaning job." }
-        : busyStemId
-          ? { title: "Saving Cleaning Settings", message: "Updating the selected stem cleaning options." }
-          : null;
+        : actionLoading === "deleteCleaned"
+          ? { title: "Deleting Cleaned Stems", message: "Removing cleaned files and stale downstream generated outputs." }
+          : busyStemId
+            ? { title: "Saving Cleaning Settings", message: "Updating the selected stem cleaning options." }
+            : null;
 
   return (
     <div>
@@ -155,6 +170,10 @@ export default function CleaningPage() {
           <Button type="button" onClick={runCleaning} disabled={!enabledCount || running || actionLoading === "clean"}>
             <Eraser size={17} />
             Run Cleaning
+          </Button>
+          <Button type="button" variant="danger" onClick={removeCleanedStems} disabled={!cleanedCount || running || actionLoading === "deleteCleaned"}>
+            <Trash2 size={17} />
+            Delete Cleaned
           </Button>
           <Button as={Link} to={`/projects/${projectId}/mixer`} variant="secondary">
             <SlidersHorizontal size={17} />

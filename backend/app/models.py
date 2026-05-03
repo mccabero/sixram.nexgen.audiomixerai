@@ -47,6 +47,10 @@ class UpdateMixStemRequest(BaseModel):
 class UpdateMixControlsRequest(BaseModel):
     preset: str | None = None
     vocalBoost: float | None = Field(default=None, ge=-6, le=6)
+    vocalBusLevel: float | None = Field(default=None, ge=-6, le=6)
+    vocalGlueAmount: float | None = Field(default=None, ge=0, le=100)
+    vocalDelayAmount: float | None = Field(default=None, ge=0, le=100)
+    backingVocalWidth: float | None = Field(default=None, ge=0, le=100)
     drumPunch: float | None = Field(default=None, ge=0, le=100)
     bassWeight: float | None = Field(default=None, ge=0, le=100)
     brightness: float | None = Field(default=None, ge=-50, le=50)
@@ -110,6 +114,7 @@ VOCAL_ENHANCER_PRESETS = [
     "Backing Vocal Wide",
 ]
 PITCH_CORRECTION_MODES = ["Off", "Natural", "Medium", "Strong"]
+VOCAL_FX_STYLES = ["Dry", "Natural Plate", "Small Hall", "Slap Delay", "Quarter Delay", "Worship Wide"]
 MUSIC_KEYS = ["Auto", "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
 MUSIC_SCALES = ["Major", "Minor", "Chromatic"]
 
@@ -120,7 +125,26 @@ class UpdateVocalEnhancementSettingsRequest(BaseModel):
     pitchCorrection: str | None = None
     key: str | None = None
     scale: str | None = None
+    fxStyle: str | None = None
+    fxAmount: float | None = Field(default=None, ge=0, le=100)
+    bodyAmount: float | None = Field(default=None, ge=-50, le=50)
+    presenceAmount: float | None = Field(default=None, ge=-50, le=50)
+    airAmount: float | None = Field(default=None, ge=-50, le=50)
+    deEssAmount: float | None = Field(default=None, ge=0, le=100)
+    compressionAmount: float | None = Field(default=None, ge=0, le=100)
+    riderAmount: float | None = Field(default=None, ge=0, le=100)
+    saturationAmount: float | None = Field(default=None, ge=0, le=100)
+    doublerAmount: float | None = Field(default=None, ge=0, le=100)
+    breathReductionAmount: float | None = Field(default=None, ge=0, le=100)
+    mouthClickReductionAmount: float | None = Field(default=None, ge=0, le=100)
+    pitchStrength: float | None = Field(default=None, ge=0, le=100)
+    pitchHumanize: float | None = Field(default=None, ge=0, le=100)
     useEnhancedInMix: bool | None = None
+
+
+class CreateVocalPresetRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=80)
+    settings: UpdateVocalEnhancementSettingsRequest
 
 
 class StemMetadata(BaseModel):
@@ -197,6 +221,7 @@ class StemCleaningResult(BaseModel):
     metricDeltas: dict[str, float | None] = Field(default_factory=dict)
     operations: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
+    report: dict = Field(default_factory=dict)
     error: str | None = None
 
 
@@ -206,6 +231,20 @@ class StemVocalEnhancementSettings(BaseModel):
     pitchCorrection: str = "Off"
     key: str = "Auto"
     scale: str = "Major"
+    fxStyle: str = "Natural Plate"
+    fxAmount: float = 25
+    bodyAmount: float = 0
+    presenceAmount: float = 0
+    airAmount: float = 0
+    deEssAmount: float = 50
+    compressionAmount: float = 50
+    riderAmount: float = 50
+    saturationAmount: float = 50
+    doublerAmount: float = 50
+    breathReductionAmount: float = 35
+    mouthClickReductionAmount: float = 30
+    pitchStrength: float = 50
+    pitchHumanize: float = 60
     useEnhancedInMix: bool = True
 
 
@@ -221,6 +260,20 @@ class StemVocalEnhancementResult(BaseModel):
     pitchCorrection: str = "Off"
     key: str = "Auto"
     scale: str = "Major"
+    fxStyle: str = "Natural Plate"
+    fxAmount: float = 25
+    bodyAmount: float = 0
+    presenceAmount: float = 0
+    airAmount: float = 0
+    deEssAmount: float = 50
+    compressionAmount: float = 50
+    riderAmount: float = 50
+    saturationAmount: float = 50
+    doublerAmount: float = 50
+    breathReductionAmount: float = 35
+    mouthClickReductionAmount: float = 30
+    pitchStrength: float = 50
+    pitchHumanize: float = 60
     peakDbfs: float | None = None
     rmsDbfs: float | None = None
     integratedLufs: float | None = None
@@ -228,6 +281,42 @@ class StemVocalEnhancementResult(BaseModel):
     enhancedMetrics: CleaningMetrics | None = None
     metricDeltas: dict[str, float | None] = Field(default_factory=dict)
     operations: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    report: dict = Field(default_factory=dict)
+    error: str | None = None
+
+
+class VocalIssue(BaseModel):
+    type: str
+    severity: str
+    message: str
+
+
+class StemVocalAnalysisResult(BaseModel):
+    stemId: str
+    status: str = "Pending"
+    analyzedAt: str | None = None
+    sourceFilePath: str | None = None
+    sourceKind: str = "Original"
+    confidence: int = Field(default=0, ge=0, le=100)
+    summary: str | None = None
+    issues: list[VocalIssue] = Field(default_factory=list)
+    recommendedSettings: dict[str, float | str | bool] = Field(default_factory=dict)
+    features: dict[str, float | int | str | None] = Field(default_factory=dict)
+    warnings: list[str] = Field(default_factory=list)
+    error: str | None = None
+
+
+class StemVocalQualityDoctorResult(BaseModel):
+    stemId: str
+    status: str = "Pending"
+    diagnosedAt: str | None = None
+    score: int = Field(default=0, ge=0, le=100)
+    summary: str | None = None
+    problems: list[VocalIssue] = Field(default_factory=list)
+    recommendedSettings: dict[str, float | str | bool] = Field(default_factory=dict)
+    mixControlSuggestions: dict[str, float | str | bool] = Field(default_factory=dict)
+    nextSteps: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
     error: str | None = None
 
@@ -255,6 +344,8 @@ class Stem(BaseModel):
     vocalEnhancementSettings: StemVocalEnhancementSettings = Field(default_factory=StemVocalEnhancementSettings)
     vocalEnhancementStatus: str = "Not Enhanced"
     vocalEnhancementResult: StemVocalEnhancementResult | None = None
+    vocalAnalysisResult: StemVocalAnalysisResult | None = None
+    vocalQualityDoctorResult: StemVocalQualityDoctorResult | None = None
 
 
 class MixStemSetting(BaseModel):
@@ -274,6 +365,10 @@ class MixStemSetting(BaseModel):
 class MixControls(BaseModel):
     preset: str = "Balanced"
     vocalBoost: float = 1.5
+    vocalBusLevel: float = 0
+    vocalGlueAmount: float = 45
+    vocalDelayAmount: float = 25
+    backingVocalWidth: float = 60
     drumPunch: float = 50
     bassWeight: float = 50
     brightness: float = 0
@@ -508,6 +603,10 @@ def validate_vocal_enhancer_preset(preset: str) -> bool:
 
 def validate_pitch_correction_mode(mode: str) -> bool:
     return mode in PITCH_CORRECTION_MODES
+
+
+def validate_vocal_fx_style(style: str) -> bool:
+    return style in VOCAL_FX_STYLES
 
 
 def validate_music_key(key: str) -> bool:

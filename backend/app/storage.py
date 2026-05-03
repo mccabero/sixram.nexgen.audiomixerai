@@ -1,6 +1,8 @@
 import json
 import re
+import shutil
 import threading
+import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -42,10 +44,29 @@ class JsonStore:
 
     def _write_unlocked(self, data: dict[str, Any]) -> None:
         DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-        temp_path = DB_PATH.with_suffix(".tmp")
+        temp_path = DB_PATH.with_name(f"{DB_PATH.stem}.{uuid.uuid4().hex}.tmp")
         with temp_path.open("w", encoding="utf-8") as db_file:
             json.dump(data, db_file, indent=2)
-        temp_path.replace(DB_PATH)
+            db_file.flush()
+
+        last_error: PermissionError | None = None
+        for attempt in range(10):
+            try:
+                temp_path.replace(DB_PATH)
+                return
+            except PermissionError as exc:
+                last_error = exc
+                time.sleep(0.05 * (attempt + 1))
+
+        try:
+            if temp_path.exists():
+                temp_path.unlink()
+        except OSError:
+            pass
+        raise HTTPException(
+            status_code=500,
+            detail="Could not save local metadata because app_data.json is locked. Close duplicate backend windows and retry.",
+        ) from last_error
 
 
 store = JsonStore()
@@ -137,6 +158,28 @@ def update_project(project_id: str, payload: UpdateProjectRequest) -> Project:
     store.save(data)
     append_project_log(project_subdirs(project_id)["logs"], f"Updated project details for {previous_name}.")
     return Project(**project)
+
+
+def delete_project(project_id: str) -> dict[str, str]:
+    data = store.load()
+    projects = data.get("projects", [])
+    index = next((idx for idx, item in enumerate(projects) if item.get("id") == project_id), None)
+    if index is None:
+        raise HTTPException(status_code=404, detail="Project not found.")
+
+    project = projects[index]
+    active_job = next((job for job in project.get("processingJobs", []) if job.get("status") in {"Pending", "Processing"}), None)
+    if active_job:
+        raise HTTPException(status_code=400, detail="Stop or abandon running jobs before deleting this project.")
+
+    root = _safe_project_root(project_id)
+    if root.exists():
+        _remove_project_tree(root)
+
+    deleted_name = project.get("name", project_id)
+    projects.pop(index)
+    store.save(data)
+    return {"message": f"Project '{deleted_name}' and all local project files were deleted."}
 
 
 async def save_uploaded_stems(project_id: str, files: list[UploadFile]) -> tuple[list[Stem], list[dict[str, str]]]:
@@ -349,6 +392,20 @@ def _mark_interrupted_vocal_stems(project: dict[str, Any]) -> None:
         settings.setdefault("pitchCorrection", "Off")
         settings.setdefault("key", "Auto")
         settings.setdefault("scale", "Major")
+        settings.setdefault("fxStyle", "Natural Plate")
+        settings.setdefault("fxAmount", 25)
+        settings.setdefault("bodyAmount", 0)
+        settings.setdefault("presenceAmount", 0)
+        settings.setdefault("airAmount", 0)
+        settings.setdefault("deEssAmount", 50)
+        settings.setdefault("compressionAmount", 50)
+        settings.setdefault("riderAmount", 50)
+        settings.setdefault("saturationAmount", 50)
+        settings.setdefault("doublerAmount", 50)
+        settings.setdefault("breathReductionAmount", 35)
+        settings.setdefault("mouthClickReductionAmount", 30)
+        settings.setdefault("pitchStrength", 50)
+        settings.setdefault("pitchHumanize", 60)
         settings.setdefault("useEnhancedInMix", True)
         result = stem.get("vocalEnhancementResult") or {}
         result_matches = (
@@ -357,6 +414,9 @@ def _mark_interrupted_vocal_stems(project: dict[str, Any]) -> None:
             and result.get("pitchCorrection") == settings.get("pitchCorrection")
             and result.get("key") == settings.get("key")
             and result.get("scale") == settings.get("scale")
+            and result.get("fxStyle", "Natural Plate") == settings.get("fxStyle")
+            and float(result.get("fxAmount", 25)) == float(settings.get("fxAmount", 25))
+            and _vocal_result_controls_match(result, settings)
             and bool(result.get("enhancedFilePath"))
         )
         if not settings.get("enabled"):
@@ -365,6 +425,24 @@ def _mark_interrupted_vocal_stems(project: dict[str, Any]) -> None:
             stem["vocalEnhancementStatus"] = "Completed"
         elif stem.get("vocalEnhancementStatus") in {"Processing", "Pending"}:
             stem["vocalEnhancementStatus"] = "Pending"
+
+
+def _vocal_result_controls_match(result: dict[str, Any], settings: dict[str, Any]) -> bool:
+    defaults = {
+        "bodyAmount": 0,
+        "presenceAmount": 0,
+        "airAmount": 0,
+        "deEssAmount": 50,
+        "compressionAmount": 50,
+        "riderAmount": 50,
+        "saturationAmount": 50,
+        "doublerAmount": 50,
+        "breathReductionAmount": 35,
+        "mouthClickReductionAmount": 30,
+        "pitchStrength": 50,
+        "pitchHumanize": 60,
+    }
+    return all(float(result.get(key, default)) == float(settings.get(key, default)) for key, default in defaults.items())
 
 
 def read_project_logs(project_id: str, limit: int = 200) -> dict[str, list[dict[str, str]]]:
@@ -468,10 +546,46 @@ def _resolve_stored_file_path(path_value: str) -> Path:
     return BASE_DIR / path
 
 
+def _safe_project_root(project_id: str) -> Path:
+    root = project_dir(project_id).resolve()
+    projects_root = PROJECTS_ROOT.resolve()
+    if root == projects_root:
+        raise HTTPException(status_code=500, detail="Refusing to delete the projects root folder.")
+    try:
+        inside_projects_root = root.is_relative_to(projects_root)
+    except AttributeError:
+        inside_projects_root = str(root).startswith(str(projects_root) + "\\") or str(root).startswith(str(projects_root) + "/")
+    if not inside_projects_root:
+        raise HTTPException(status_code=500, detail="Refusing to delete a project folder outside local storage.")
+    return root
+
+
+def _remove_project_tree(root: Path) -> None:
+    last_error: Exception | None = None
+    for attempt in range(8):
+        try:
+            shutil.rmtree(root)
+            return
+        except FileNotFoundError:
+            return
+        except PermissionError as exc:
+            last_error = exc
+            time.sleep(0.08 * (attempt + 1))
+        except OSError as exc:
+            last_error = exc
+            time.sleep(0.08 * (attempt + 1))
+    raise HTTPException(
+        status_code=500,
+        detail="Could not delete all project files. Close audio players or Explorer windows opened inside this project folder and retry.",
+    ) from last_error
+
+
 def _ensure_data_defaults(data: dict[str, Any]) -> None:
     data.setdefault("projects", [])
     data.setdefault("detectionMemory", {"filenamePatterns": {}})
     data["detectionMemory"].setdefault("filenamePatterns", {})
+    data.setdefault("vocalPresetLibrary", {"presets": []})
+    data["vocalPresetLibrary"].setdefault("presets", [])
 
 
 def _ensure_project_defaults(project: dict[str, Any]) -> None:
@@ -570,6 +684,18 @@ def _ensure_project_defaults(project: dict[str, Any]) -> None:
                 "pitchCorrection": "Off",
                 "key": "Auto",
                 "scale": "Major",
+                "fxStyle": "Natural Plate",
+                "fxAmount": 25,
+                "bodyAmount": 0,
+                "presenceAmount": 0,
+                "airAmount": 0,
+                "deEssAmount": 50,
+                "compressionAmount": 50,
+                "riderAmount": 50,
+                "saturationAmount": 50,
+                "doublerAmount": 50,
+                "pitchStrength": 50,
+                "pitchHumanize": 60,
                 "useEnhancedInMix": True,
             },
         )
@@ -578,9 +704,24 @@ def _ensure_project_defaults(project: dict[str, Any]) -> None:
         stem["vocalEnhancementSettings"].setdefault("pitchCorrection", "Off")
         stem["vocalEnhancementSettings"].setdefault("key", "Auto")
         stem["vocalEnhancementSettings"].setdefault("scale", "Major")
+        stem["vocalEnhancementSettings"].setdefault("fxStyle", "Natural Plate")
+        stem["vocalEnhancementSettings"].setdefault("fxAmount", 25)
+        stem["vocalEnhancementSettings"].setdefault("bodyAmount", 0)
+        stem["vocalEnhancementSettings"].setdefault("presenceAmount", 0)
+        stem["vocalEnhancementSettings"].setdefault("airAmount", 0)
+        stem["vocalEnhancementSettings"].setdefault("deEssAmount", 50)
+        stem["vocalEnhancementSettings"].setdefault("compressionAmount", 50)
+        stem["vocalEnhancementSettings"].setdefault("riderAmount", 50)
+        stem["vocalEnhancementSettings"].setdefault("saturationAmount", 50)
+        stem["vocalEnhancementSettings"].setdefault("doublerAmount", 50)
+        stem["vocalEnhancementSettings"].setdefault("breathReductionAmount", 35)
+        stem["vocalEnhancementSettings"].setdefault("mouthClickReductionAmount", 30)
+        stem["vocalEnhancementSettings"].setdefault("pitchStrength", 50)
+        stem["vocalEnhancementSettings"].setdefault("pitchHumanize", 60)
         stem["vocalEnhancementSettings"].setdefault("useEnhancedInMix", True)
         stem.setdefault("vocalEnhancementStatus", "Not Enhanced")
         stem.setdefault("vocalEnhancementResult", None)
+        stem.setdefault("vocalAnalysisResult", None)
         if "stemTypeSource" not in stem:
             stem["stemTypeSource"] = "Manual" if stem.get("stemType", "Unknown") != "Unknown" else "Unknown"
         stem.setdefault(
@@ -679,6 +820,10 @@ def _default_mix_controls() -> dict[str, float | str]:
     return {
         "preset": "Balanced",
         "vocalBoost": 1.5,
+        "vocalBusLevel": 0,
+        "vocalGlueAmount": 45,
+        "vocalDelayAmount": 25,
+        "backingVocalWidth": 60,
         "drumPunch": 50,
         "bassWeight": 50,
         "brightness": 0,

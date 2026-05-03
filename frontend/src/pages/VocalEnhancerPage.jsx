@@ -1,7 +1,22 @@
-import { ArrowLeft, Mic2, RefreshCw, SlidersHorizontal, Sparkles } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { ArrowLeft, Brain, CheckCircle2, Library, Mic2, RefreshCw, Save, SlidersHorizontal, Sparkles, Stethoscope, Trash2 } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { getProcessingJob, getProject, listVocalEnhancerPresets, startVocalEnhancement, updateVocalEnhancementSettings } from "../api.js";
+import {
+  analyzeVocalRecommendations,
+  applyAllVocalRecommendations,
+  applyVocalDoctorFix,
+  applyVocalRecommendation,
+  createCustomVocalPreset,
+  deleteCustomVocalPreset,
+  deleteVocalEnhancements,
+  getProcessingJob,
+  getProject,
+  listCustomVocalPresets,
+  listVocalEnhancerPresets,
+  runVocalQualityDoctor,
+  startVocalEnhancement,
+  updateVocalEnhancementSettings,
+} from "../api.js";
 import Button from "../components/Button.jsx";
 import EmptyState from "../components/EmptyState.jsx";
 import ProcessingPanel from "../components/ProcessingPanel.jsx";
@@ -15,14 +30,30 @@ const vocalTypes = new Set(["Lead Vocal", "Backing Vocal"]);
 const defaultOptions = {
   presets: ["Natural Clean", "Pop Vocal", "Worship Lead", "Live Vocal Fix", "Bright AI Polish", "Warm Ballad", "Backing Vocal Wide"],
   pitchCorrectionModes: ["Off", "Natural", "Medium", "Strong"],
+  fxStyles: ["Dry", "Natural Plate", "Small Hall", "Slap Delay", "Quarter Delay", "Worship Wide"],
   keys: ["Auto", "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"],
   scales: ["Major", "Minor", "Chromatic"],
 };
+const recommendationSettingLabels = [
+  ["preset", "Preset"],
+  ["pitchCorrection", "Pitch"],
+  ["bodyAmount", "Body"],
+  ["presenceAmount", "Presence"],
+  ["airAmount", "Air"],
+  ["deEssAmount", "De-ess"],
+  ["compressionAmount", "Comp"],
+  ["riderAmount", "Rider"],
+  ["breathReductionAmount", "Breath"],
+  ["mouthClickReductionAmount", "Clicks"],
+  ["key", "Key"],
+  ["scale", "Scale"],
+];
 
 export default function VocalEnhancerPage() {
   const { projectId } = useParams();
   const [project, setProject] = useState(null);
   const [options, setOptions] = useState(defaultOptions);
+  const [customPresets, setCustomPresets] = useState([]);
   const [job, setJob] = useState(null);
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState("");
@@ -34,6 +65,9 @@ export default function VocalEnhancerPage() {
   const enabledCount = vocalStems.filter((stem) => vocalSettings(stem).enabled).length;
   const enhancedCount = vocalStems.filter((stem) => stem.vocalEnhancementResult?.status === "Completed").length;
   const useEnhancedCount = vocalStems.filter((stem) => vocalSettings(stem).useEnhancedInMix && stem.vocalEnhancementResult?.status === "Completed").length;
+  const recommendationCount = vocalStems.filter((stem) => stem.vocalAnalysisResult?.status === "Completed").length;
+  const doctorCount = vocalStems.filter((stem) => stem.vocalQualityDoctorResult?.status === "Completed").length;
+  const latestMix = latestMixVersion(project);
   const running = job && runningStatuses.has(job.status);
 
   const latestJob = useMemo(() => {
@@ -44,9 +78,14 @@ export default function VocalEnhancerPage() {
   const loadProject = async () => {
     setError("");
     try {
-      const [nextProject, presetPayload] = await Promise.all([getProject(projectId), listVocalEnhancerPresets().catch(() => null)]);
+      const [nextProject, presetPayload, customPresetPayload] = await Promise.all([
+        getProject(projectId),
+        listVocalEnhancerPresets().catch(() => null),
+        listCustomVocalPresets().catch(() => null),
+      ]);
       setProject(nextProject);
       if (presetPayload) setOptions({ ...defaultOptions, ...presetPayload });
+      if (customPresetPayload?.presets) setCustomPresets(customPresetPayload.presets);
       if (!job && latestJob) setJob(latestJob);
     } catch (err) {
       setError(err.message);
@@ -101,6 +140,83 @@ export default function VocalEnhancerPage() {
     }
   };
 
+  const removeVocalEnhancements = async () => {
+    if (!window.confirm("Delete enhanced vocal files and downstream mix/master outputs? Original and cleaned stems are kept.")) return;
+    setActionLoading("delete-vocals");
+    setError("");
+    try {
+      setProject(await deleteVocalEnhancements(projectId));
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setActionLoading("");
+    }
+  };
+
+  const analyzeVocals = async () => {
+    setActionLoading("analyze-vocals");
+    setError("");
+    try {
+      setProject(await analyzeVocalRecommendations(projectId));
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setActionLoading("");
+    }
+  };
+
+  const applyRecommendation = async (stem) => {
+    setBusyStemId(stem.id);
+    setError("");
+    try {
+      const updated = await applyVocalRecommendation(projectId, stem.id);
+      setProject((current) => ({
+        ...current,
+        stems: current.stems.map((item) => (item.id === stem.id ? updated : item)),
+      }));
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusyStemId("");
+    }
+  };
+
+  const applyAllRecommendations = async () => {
+    setActionLoading("apply-all-recommendations");
+    setError("");
+    try {
+      setProject(await applyAllVocalRecommendations(projectId));
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setActionLoading("");
+    }
+  };
+
+  const runDoctor = async () => {
+    setActionLoading("doctor");
+    setError("");
+    try {
+      setProject(await runVocalQualityDoctor(projectId));
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setActionLoading("");
+    }
+  };
+
+  const applyDoctorFix = async (stem) => {
+    setBusyStemId(stem.id);
+    setError("");
+    try {
+      setProject(await applyVocalDoctorFix(projectId, stem.id));
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusyStemId("");
+    }
+  };
+
   const updateStem = async (stem, updates) => {
     setBusyStemId(stem.id);
     setError("");
@@ -117,6 +233,42 @@ export default function VocalEnhancerPage() {
     }
   };
 
+  const saveCustomPreset = async (stem) => {
+    const fallbackName = `${stem.stemType || "Vocal"} ${new Date().toLocaleDateString()}`;
+    const name = window.prompt("Preset name", fallbackName);
+    if (!name?.trim()) return;
+    setBusyStemId(stem.id);
+    setError("");
+    try {
+      const preset = await createCustomVocalPreset({ name: name.trim(), settings: presetSettingsFromStem(stem) });
+      setCustomPresets((current) => [preset, ...current]);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusyStemId("");
+    }
+  };
+
+  const applyCustomPreset = async (stem, presetId) => {
+    if (!presetId) return;
+    const preset = customPresets.find((item) => item.id === presetId);
+    if (!preset) return;
+    await updateStem(stem, preset.settings || {});
+  };
+
+  const removeCustomPreset = async (presetId) => {
+    setActionLoading("preset-delete");
+    setError("");
+    try {
+      await deleteCustomVocalPreset(presetId);
+      setCustomPresets((current) => current.filter((preset) => preset.id !== presetId));
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setActionLoading("");
+    }
+  };
+
   if (loading) {
     return <ProcessingPanel title="Loading Vocal Enhancer" message="Reading vocal settings and enhanced stem references." />;
   }
@@ -125,11 +277,21 @@ export default function VocalEnhancerPage() {
     ? { title: "Enhancing Vocals", message: job?.message || "Processing enabled vocal stems.", progress: job?.progress || 0 }
     : actionLoading === "refresh"
       ? { title: "Refreshing Vocal Enhancer", message: "Reading latest vocal enhancement metadata." }
-      : actionLoading === "enhance"
-        ? { title: "Starting Vocal Enhancement", message: "Creating the local vocal enhancer job." }
-        : busyStemId
-          ? { title: "Saving Vocal Settings", message: "Updating the selected vocal enhancement settings." }
-          : null;
+      : actionLoading === "analyze-vocals"
+        ? { title: "Analyzing Vocals", message: "Listening for tone, sibilance, noise, dynamics, and level issues." }
+        : actionLoading === "doctor"
+          ? { title: "Running Vocal Doctor", message: "Checking vocal quality, FX balance, pitch risk, mix placement, and one-click fixes." }
+          : actionLoading === "apply-all-recommendations"
+            ? { title: "Applying Vocal Recommendations", message: "Writing recommended settings to all analyzed vocal stems." }
+            : actionLoading === "enhance"
+              ? { title: "Starting Vocal Enhancement", message: "Creating the local vocal enhancer job." }
+              : actionLoading === "delete-vocals"
+                ? { title: "Deleting Enhanced Vocals", message: "Removing enhanced vocal files and stale downstream mix/master outputs." }
+                : actionLoading === "preset-delete"
+                  ? { title: "Deleting Vocal Preset", message: "Removing the saved local preset." }
+                  : busyStemId
+                    ? { title: "Saving Vocal Settings", message: "Updating the selected vocal enhancement settings." }
+                    : null;
 
   return (
     <div>
@@ -149,9 +311,25 @@ export default function VocalEnhancerPage() {
             <RefreshCw size={17} />
             Refresh
           </Button>
+          <Button type="button" variant="secondary" onClick={analyzeVocals} disabled={!vocalStems.length || running || actionLoading === "analyze-vocals"}>
+            <Brain size={17} />
+            Analyze Vocals
+          </Button>
+          <Button type="button" variant="secondary" onClick={runDoctor} disabled={!vocalStems.length || running || actionLoading === "doctor"}>
+            <Stethoscope size={17} />
+            Vocal Doctor
+          </Button>
+          <Button type="button" variant="secondary" onClick={applyAllRecommendations} disabled={!recommendationCount || running || actionLoading === "apply-all-recommendations"}>
+            <CheckCircle2 size={17} />
+            Apply All
+          </Button>
           <Button type="button" onClick={runEnhancement} disabled={!enabledCount || running || actionLoading === "enhance"}>
             <Sparkles size={17} />
             Enhance Vocals
+          </Button>
+          <Button type="button" variant="danger" onClick={removeVocalEnhancements} disabled={!enhancedCount || running || actionLoading === "delete-vocals"}>
+            <Trash2 size={17} />
+            Delete Enhanced
           </Button>
           <Button as={Link} to={`/projects/${projectId}/mixer`} variant="secondary">
             <SlidersHorizontal size={17} />
@@ -171,8 +349,10 @@ export default function VocalEnhancerPage() {
       ) : null}
 
       {vocalStems.length ? (
-        <section className="mt-6 grid gap-3 sm:grid-cols-3">
+        <section className="mt-6 grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
           <VocalStat label="Vocal Stems" value={vocalStems.length} detail="Lead/backing candidates" />
+          <VocalStat label="Recommendations" value={`${recommendationCount}/${vocalStems.length}`} detail="Ready to apply" />
+          <VocalStat label="Doctor" value={`${doctorCount}/${vocalStems.length}`} detail="Quality checks" />
           <VocalStat label="Enabled" value={`${enabledCount}/${vocalStems.length}`} detail="Queued for enhancement" />
           <VocalStat label="Mix Source" value={useEnhancedCount} detail="Using enhanced vocals" />
         </section>
@@ -182,7 +362,20 @@ export default function VocalEnhancerPage() {
         {vocalStems.length ? (
           <div className="grid gap-4">
             {vocalStems.map((stem) => (
-              <VocalStemCard key={stem.id} stem={stem} options={options} busy={busyStemId === stem.id} onChange={updateStem} />
+              <VocalStemCard
+                key={stem.id}
+                stem={stem}
+                options={options}
+                customPresets={customPresets}
+                latestMix={latestMix}
+                busy={busyStemId === stem.id}
+                onApplyCustomPreset={applyCustomPreset}
+                onApplyDoctorFix={applyDoctorFix}
+                onApplyRecommendation={applyRecommendation}
+                onDeleteCustomPreset={removeCustomPreset}
+                onSaveCustomPreset={saveCustomPreset}
+                onChange={updateStem}
+              />
             ))}
           </div>
         ) : (
@@ -202,11 +395,14 @@ export default function VocalEnhancerPage() {
   );
 }
 
-function VocalStemCard({ stem, options, busy, onChange }) {
+function VocalStemCard({ stem, options, customPresets, latestMix, busy, onApplyCustomPreset, onApplyDoctorFix, onApplyRecommendation, onDeleteCustomPreset, onSaveCustomPreset, onChange }) {
   const settings = vocalSettings(stem);
   const result = stem.vocalEnhancementResult || {};
+  const recommendation = stem.vocalAnalysisResult || {};
+  const doctor = stem.vocalQualityDoctorResult || {};
   const sourceUrl = sourcePreviewUrl(stem);
   const enhancedReady = result.status === "Completed" && result.enhancedFileUrl;
+  const matchedVolumes = loudnessMatchedVolumes(result);
 
   return (
     <article className="rounded-lg border border-white/10 bg-gradient-to-br from-white/[0.06] to-black/30 p-4 shadow-[0_18px_55px_rgba(0,0,0,0.2)]">
@@ -220,6 +416,15 @@ function VocalStemCard({ stem, options, busy, onChange }) {
         </div>
         <StatusBadge status={stem.vocalEnhancementStatus || "Not Enhanced"} />
       </div>
+
+      <VocalPresetPanel
+        stem={stem}
+        customPresets={customPresets}
+        busy={busy}
+        onApplyPreset={(presetId) => onApplyCustomPreset(stem, presetId)}
+        onDeletePreset={onDeleteCustomPreset}
+        onSavePreset={() => onSaveCustomPreset(stem)}
+      />
 
       <div className="mt-4 grid gap-4 xl:grid-cols-[0.9fr_1.1fr]">
         <div className="grid gap-3 sm:grid-cols-2">
@@ -239,13 +444,50 @@ function VocalStemCard({ stem, options, busy, onChange }) {
           <SelectControl label="Pitch" value={settings.pitchCorrection} options={options.pitchCorrectionModes} disabled={busy} onChange={(value) => onChange(stem, { pitchCorrection: value })} />
           <SelectControl label="Key" value={settings.key} options={options.keys} disabled={busy || settings.pitchCorrection === "Off"} onChange={(value) => onChange(stem, { key: value })} />
           <SelectControl label="Scale" value={settings.scale} options={options.scales} disabled={busy || settings.pitchCorrection === "Off"} onChange={(value) => onChange(stem, { scale: value })} />
+          <SelectControl label="FX Style" value={settings.fxStyle} options={options.fxStyles} disabled={busy} onChange={(value) => onChange(stem, { fxStyle: value })} />
+          <RangeControl label="FX Amount" value={settings.fxAmount} disabled={busy || settings.fxStyle === "Dry"} onChange={(value) => onChange(stem, { fxAmount: value })} />
+          <RangeControl label="Pitch Strength" value={settings.pitchStrength} disabled={busy || settings.pitchCorrection === "Off"} onChange={(value) => onChange(stem, { pitchStrength: value })} />
+          <RangeControl label="Pitch Humanize" value={settings.pitchHumanize} disabled={busy || settings.pitchCorrection === "Off"} onChange={(value) => onChange(stem, { pitchHumanize: value })} />
         </div>
 
-        <div className="grid gap-4 lg:grid-cols-2">
-          <PreviewPlayer label={result.sourceKind ? `${result.sourceKind} Source` : "Source"} src={sourceUrl} variant="amber" />
-          <PreviewPlayer label="Enhanced" src={result.enhancedFileUrl} disabled={!enhancedReady} variant="teal" />
+        <div>
+          <div className="mb-3 rounded-lg border border-teal-300/20 bg-teal-300/10 px-3 py-2 text-xs text-teal-100">
+            Loudness-matched A/B is applied to preview players when both source and enhanced LUFS are available.
+          </div>
+          <div className="grid gap-4 lg:grid-cols-2">
+            <PreviewPlayer label={result.sourceKind ? `${result.sourceKind} Source` : "Source"} src={sourceUrl} variant="amber" volume={matchedVolumes.source} volumeLabel={matchedVolumes.sourceLabel} />
+            <PreviewPlayer label="Enhanced" src={result.enhancedFileUrl} disabled={!enhancedReady} variant="teal" volume={matchedVolumes.enhanced} volumeLabel={matchedVolumes.enhancedLabel} />
+          </div>
         </div>
       </div>
+
+      <ContextPreviewPanel sourceUrl={sourceUrl} enhancedUrl={result.enhancedFileUrl} latestMix={latestMix} enhancedReady={enhancedReady} matchedVolumes={matchedVolumes} />
+      <VocalDoctorPanel doctor={doctor} busy={busy} onApply={() => onApplyDoctorFix(stem)} />
+
+      <div className="mt-4 rounded-lg border border-white/10 bg-black/20 p-4">
+        <div className="flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
+          <div>
+            <h3 className="font-semibold text-white">Fine Tune</h3>
+            <p className="mt-1 text-sm text-zinc-500">Small offsets on top of the selected vocal preset.</p>
+          </div>
+          <span className="text-xs font-semibold uppercase tracking-[0.12em] text-zinc-500">Preset-safe controls</span>
+        </div>
+        <div className="mt-4 grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
+          <RangeControl label="Body" value={settings.bodyAmount} min={-50} max={50} disabled={busy} onChange={(value) => onChange(stem, { bodyAmount: value })} />
+          <RangeControl label="Presence" value={settings.presenceAmount} min={-50} max={50} disabled={busy} onChange={(value) => onChange(stem, { presenceAmount: value })} />
+          <RangeControl label="Air" value={settings.airAmount} min={-50} max={50} disabled={busy} onChange={(value) => onChange(stem, { airAmount: value })} />
+          <RangeControl label="De-ess" value={settings.deEssAmount} disabled={busy} onChange={(value) => onChange(stem, { deEssAmount: value })} />
+          <RangeControl label="Compression" value={settings.compressionAmount} disabled={busy} onChange={(value) => onChange(stem, { compressionAmount: value })} />
+          <RangeControl label="Vocal Rider" value={settings.riderAmount} disabled={busy} onChange={(value) => onChange(stem, { riderAmount: value })} />
+          <RangeControl label="Saturation" value={settings.saturationAmount} disabled={busy} onChange={(value) => onChange(stem, { saturationAmount: value })} />
+          <RangeControl label="Doubler" value={settings.doublerAmount} disabled={busy} onChange={(value) => onChange(stem, { doublerAmount: value })} />
+          <RangeControl label="Breath Softener" value={settings.breathReductionAmount} disabled={busy} onChange={(value) => onChange(stem, { breathReductionAmount: value })} />
+          <RangeControl label="Mouth Clicks" value={settings.mouthClickReductionAmount} disabled={busy} onChange={(value) => onChange(stem, { mouthClickReductionAmount: value })} />
+        </div>
+      </div>
+
+      <VocalRecommendationPanel recommendation={recommendation} busy={busy} onApply={() => onApplyRecommendation(stem)} />
+      <VocalReportPanel result={result} />
 
       <div className="mt-4 grid gap-3 sm:grid-cols-3">
         <Readout label="LUFS" value={formatLufs(result.integratedLufs)} />
@@ -266,6 +508,309 @@ function VocalStemCard({ stem, options, busy, onChange }) {
       {result.error ? <p className="mt-4 rounded-lg border border-rose-300/20 bg-rose-400/10 px-3 py-2 text-sm text-rose-100">{result.error}</p> : null}
       {result.warnings?.length ? <p className="mt-4 rounded-lg border border-amber-300/20 bg-amber-300/10 px-3 py-2 text-sm text-amber-100">{result.warnings[0]}</p> : null}
     </article>
+  );
+}
+
+function VocalPresetPanel({ stem, customPresets, busy, onApplyPreset, onDeletePreset, onSavePreset }) {
+  return (
+    <div className="mt-4 rounded-lg border border-white/10 bg-black/20 p-4">
+      <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+        <div>
+          <div className="flex items-center gap-2">
+            <Library size={17} className="text-teal-100" />
+            <h3 className="font-semibold text-white">Custom Vocal Presets</h3>
+          </div>
+          <p className="mt-1 text-sm text-zinc-500">Save this stem's controls, then reuse them on other vocals.</p>
+        </div>
+        <div className="flex flex-col gap-2 sm:flex-row">
+          <select
+            defaultValue=""
+            disabled={busy || !customPresets.length}
+            onChange={(event) => {
+              onApplyPreset(event.target.value);
+              event.target.value = "";
+            }}
+            className="h-10 min-w-48 rounded-lg border border-white/10 bg-black/25 px-3 text-sm text-white disabled:opacity-50"
+            aria-label={`Apply custom vocal preset to ${stem.originalFilename}`}
+          >
+            <option value="">Apply preset...</option>
+            {customPresets.map((preset) => (
+              <option key={preset.id} value={preset.id}>
+                {preset.name}
+              </option>
+            ))}
+          </select>
+          <Button type="button" variant="secondary" onClick={onSavePreset} disabled={busy}>
+            <Save size={17} />
+            Save Preset
+          </Button>
+        </div>
+      </div>
+      {customPresets.length ? (
+        <div className="mt-3 flex flex-wrap gap-2">
+          {customPresets.slice(0, 8).map((preset) => (
+            <span key={preset.id} className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.05] py-1 pl-3 pr-1 text-xs font-medium text-zinc-200">
+              {preset.name}
+              <button type="button" onClick={() => onDeletePreset(preset.id)} className="grid h-6 w-6 place-items-center rounded-full text-zinc-400 transition hover:bg-rose-400/15 hover:text-rose-100" aria-label={`Delete ${preset.name}`}>
+                <Trash2 size={13} />
+              </button>
+            </span>
+          ))}
+        </div>
+      ) : (
+        <p className="mt-3 text-sm text-zinc-500">No custom presets saved yet.</p>
+      )}
+    </div>
+  );
+}
+
+function ContextPreviewPanel({ sourceUrl, enhancedUrl, latestMix, enhancedReady, matchedVolumes }) {
+  const bedRef = useRef(null);
+  const sourceRef = useRef(null);
+  const enhancedRef = useRef(null);
+  const [bedVolume, setBedVolume] = useState(24);
+  const [mode, setMode] = useState("");
+
+  const stopAll = () => {
+    [bedRef, sourceRef, enhancedRef].forEach((ref) => {
+      if (ref.current) {
+        ref.current.pause();
+        ref.current.currentTime = 0;
+      }
+    });
+    setMode("");
+  };
+
+  const playContext = async (nextMode) => {
+    const vocalRef = nextMode === "enhanced" ? enhancedRef : sourceRef;
+    if (!latestMix?.url || !vocalRef.current || (nextMode === "enhanced" && !enhancedReady)) return;
+    stopAll();
+    setMode(nextMode);
+    if (bedRef.current) {
+      bedRef.current.volume = Math.max(0, Math.min(1, bedVolume / 100));
+      bedRef.current.currentTime = 0;
+    }
+    vocalRef.current.volume = nextMode === "enhanced" ? matchedVolumes.enhanced : matchedVolumes.source;
+    vocalRef.current.currentTime = 0;
+    try {
+      await Promise.all([bedRef.current?.play(), vocalRef.current.play()]);
+    } catch {
+      setMode("");
+    }
+  };
+
+  useEffect(() => {
+    if (bedRef.current) bedRef.current.volume = Math.max(0, Math.min(1, bedVolume / 100));
+  }, [bedVolume]);
+
+  return (
+    <div className="mt-4 rounded-lg border border-fuchsia-300/15 bg-fuchsia-300/[0.055] p-4">
+      <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+        <div>
+          <h3 className="font-semibold text-white">A/B In Mix Context</h3>
+          <p className="mt-1 text-sm text-zinc-400">{latestMix?.url ? `Using ${latestMix.label} quietly underneath the selected vocal.` : "Generate a mix version first to preview vocals in context."}</p>
+        </div>
+        <div className="flex flex-col gap-2 sm:flex-row">
+          <Button type="button" variant={mode === "source" ? "primary" : "secondary"} onClick={() => playContext("source")} disabled={!latestMix?.url || !sourceUrl}>
+            Source In Mix
+          </Button>
+          <Button type="button" variant={mode === "enhanced" ? "primary" : "secondary"} onClick={() => playContext("enhanced")} disabled={!latestMix?.url || !enhancedReady}>
+            Enhanced In Mix
+          </Button>
+          <Button type="button" variant="secondary" onClick={stopAll} disabled={!mode}>
+            Stop
+          </Button>
+        </div>
+      </div>
+      <div className="mt-4 grid gap-3 lg:grid-cols-[1fr_220px] lg:items-center">
+        <audio ref={bedRef} src={latestMix?.url || ""} onEnded={() => setMode("")} />
+        <audio ref={sourceRef} src={sourceUrl || ""} onEnded={() => setMode("")} />
+        <audio ref={enhancedRef} src={enhancedUrl || ""} onEnded={() => setMode("")} />
+        <p className="truncate text-xs text-zinc-500">{latestMix?.path || "No mix bed available."}</p>
+        <label>
+          <span className="mb-2 flex items-center justify-between text-xs font-semibold uppercase tracking-[0.12em] text-zinc-500">
+            <span>Mix Bed</span>
+            <span className="normal-case tracking-normal text-zinc-300">{bedVolume}%</span>
+          </span>
+          <input type="range" min={0} max={60} value={bedVolume} onChange={(event) => setBedVolume(Number(event.target.value))} className="w-full accent-fuchsia-300" />
+        </label>
+      </div>
+    </div>
+  );
+}
+
+function VocalDoctorPanel({ doctor, busy, onApply }) {
+  const ready = doctor.status === "Completed";
+  const failed = doctor.status === "Failed";
+  const problems = doctor.problems || [];
+  const settings = doctor.recommendedSettings || {};
+  const mixControls = doctor.mixControlSuggestions || {};
+  const hasFix = Object.keys(settings).length > 0 || Object.keys(mixControls).length > 0;
+
+  return (
+    <div className="mt-4 rounded-lg border border-amber-300/20 bg-amber-300/[0.065] p-4">
+      <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+        <div>
+          <div className="flex flex-wrap items-center gap-2">
+            <Stethoscope size={17} className="text-amber-100" />
+            <h3 className="font-semibold text-white">Vocal Quality Doctor</h3>
+            {ready ? <span className={`rounded-full border px-2 py-1 text-xs font-semibold ${doctorScoreClass(doctor.score)}`}>{doctor.score}/100</span> : null}
+          </div>
+          <p className="mt-1 text-sm text-zinc-400">
+            {ready ? doctor.summary : failed ? doctor.error || "Vocal Doctor could not diagnose this stem." : "Run Vocal Doctor to explain why this vocal may sound rough and get a one-click fix."}
+          </p>
+        </div>
+        {ready && hasFix ? (
+          <Button type="button" variant="secondary" onClick={onApply} disabled={busy}>
+            <CheckCircle2 size={17} />
+            Apply Doctor Fix
+          </Button>
+        ) : null}
+      </div>
+
+      {ready ? (
+        <div className="mt-4 grid gap-3 xl:grid-cols-[0.9fr_1.1fr]">
+          <div className="rounded-lg border border-white/10 bg-black/20 p-3">
+            <p className="text-xs font-semibold uppercase tracking-[0.12em] text-zinc-500">Diagnosis</p>
+            {problems.length ? (
+              <div className="mt-3 flex flex-wrap gap-2">
+                {problems.map((problem) => (
+                  <span key={`${problem.type}-${problem.message}`} className={`rounded-full border px-2.5 py-1 text-xs font-semibold ${severityClass(problem.severity)}`} title={problem.message}>
+                    {problem.type}
+                  </span>
+                ))}
+              </div>
+            ) : (
+              <p className="mt-3 text-sm text-zinc-500">No major vocal quality blockers found.</p>
+            )}
+            {doctor.nextSteps?.length ? (
+              <div className="mt-3 space-y-1">
+                {doctor.nextSteps.slice(0, 4).map((step) => (
+                  <p key={step} className="text-xs text-zinc-400">{step}</p>
+                ))}
+              </div>
+            ) : null}
+          </div>
+
+          <div className="rounded-lg border border-white/10 bg-black/20 p-3">
+            <p className="text-xs font-semibold uppercase tracking-[0.12em] text-zinc-500">Doctor Fixes</p>
+            {hasFix ? (
+              <div className="mt-3 flex flex-wrap gap-2">
+                {Object.entries(settings).map(([key, value]) => (
+                  <span key={`vocal-${key}`} className="rounded-full border border-amber-200/20 bg-amber-300/10 px-2.5 py-1 text-xs font-medium text-amber-50">
+                    {doctorPatchLabel(key)}: <span className="text-white">{formatRecommendedValue(key, value)}</span>
+                  </span>
+                ))}
+                {Object.entries(mixControls).map(([key, value]) => (
+                  <span key={`mix-${key}`} className="rounded-full border border-fuchsia-200/20 bg-fuchsia-300/10 px-2.5 py-1 text-xs font-medium text-fuchsia-50">
+                    Mix {doctorPatchLabel(key)}: <span className="text-white">{formatRecommendedValue(key, value)}</span>
+                  </span>
+                ))}
+              </div>
+            ) : (
+              <p className="mt-3 text-sm text-zinc-500">No setting changes needed right now.</p>
+            )}
+            {doctor.warnings?.length ? (
+              <p className="mt-3 rounded-lg border border-amber-300/20 bg-amber-300/10 px-3 py-2 text-sm text-amber-100">{doctor.warnings[0]}</p>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function VocalRecommendationPanel({ recommendation, busy, onApply }) {
+  const ready = recommendation.status === "Completed";
+  const failed = recommendation.status === "Failed";
+  const issues = recommendation.issues || [];
+  const settings = recommendation.recommendedSettings || {};
+
+  return (
+    <div className="mt-4 rounded-lg border border-cyan-300/15 bg-cyan-300/[0.06] p-4">
+      <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+        <div>
+          <div className="flex flex-wrap items-center gap-2">
+            <Brain size={17} className="text-cyan-100" />
+            <h3 className="font-semibold text-white">Vocal Recommendation</h3>
+            {ready ? <span className="rounded-full border border-cyan-200/20 bg-cyan-200/10 px-2 py-1 text-xs font-semibold text-cyan-100">{recommendation.confidence}% confidence</span> : null}
+          </div>
+          <p className="mt-1 text-sm text-zinc-400">
+            {ready ? recommendation.summary : failed ? recommendation.error || "Recommendation analysis failed." : "Run Analyze Vocals to get automatic settings for this stem."}
+          </p>
+        </div>
+        {ready ? (
+          <Button type="button" variant="secondary" onClick={onApply} disabled={busy}>
+            <CheckCircle2 size={17} />
+            Apply Recommendation
+          </Button>
+        ) : null}
+      </div>
+
+      {ready ? (
+        <>
+          <div className="mt-4 grid gap-3 lg:grid-cols-[0.9fr_1.1fr]">
+            <div className="rounded-lg border border-white/10 bg-black/20 p-3">
+              <p className="text-xs font-semibold uppercase tracking-[0.12em] text-zinc-500">Findings</p>
+              {issues.length ? (
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {issues.map((issue) => (
+                    <span key={`${issue.type}-${issue.message}`} className={`rounded-full border px-2.5 py-1 text-xs font-semibold ${severityClass(issue.severity)}`} title={issue.message}>
+                      {issue.type}
+                    </span>
+                  ))}
+                </div>
+              ) : (
+                <p className="mt-3 text-sm text-zinc-500">No major vocal issues found.</p>
+              )}
+            </div>
+            <div className="rounded-lg border border-white/10 bg-black/20 p-3">
+              <p className="text-xs font-semibold uppercase tracking-[0.12em] text-zinc-500">Suggested Settings</p>
+              <div className="mt-3 flex flex-wrap gap-2">
+                {recommendationSettingLabels.map(([key, label]) => (
+                  <span key={key} className="rounded-full border border-white/10 bg-white/[0.05] px-2.5 py-1 text-xs font-medium text-zinc-200">
+                    {label}: <span className="text-white">{formatRecommendedValue(key, settings[key])}</span>
+                  </span>
+                ))}
+              </div>
+            </div>
+          </div>
+          {recommendation.warnings?.length ? (
+            <p className="mt-3 rounded-lg border border-amber-300/20 bg-amber-300/10 px-3 py-2 text-sm text-amber-100">{recommendation.warnings[0]}</p>
+          ) : null}
+        </>
+      ) : null}
+    </div>
+  );
+}
+
+function VocalReportPanel({ result }) {
+  const report = result.report || {};
+  if (result.status !== "Completed" || !report.summary) return null;
+  return (
+    <div className="mt-4 rounded-lg border border-white/10 bg-black/20 p-4">
+      <div className="flex flex-col gap-1 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <h3 className="font-semibold text-white">Vocal Report</h3>
+          <p className="mt-1 text-sm text-zinc-400">{report.summary}</p>
+        </div>
+        <span className="text-xs font-semibold uppercase tracking-[0.12em] text-zinc-500">Before / After</span>
+      </div>
+      <div className="mt-4 grid gap-3 sm:grid-cols-3">
+        <Readout label="LUFS Delta" value={formatDelta(report.deltas?.integratedLufs, " dB")} />
+        <Readout label="Peak Delta" value={formatDelta(report.deltas?.peakDbfs, " dB")} />
+        <Readout label="Noise Delta" value={formatDelta(report.deltas?.noiseFloorDbfs, " dB")} />
+      </div>
+      {report.improvements?.length ? (
+        <div className="mt-3 flex flex-wrap gap-2">
+          {report.improvements.slice(0, 6).map((item) => (
+            <span key={item} className="rounded-full border border-white/10 bg-white/[0.05] px-2.5 py-1 text-xs font-medium text-zinc-200">
+              {item}
+            </span>
+          ))}
+        </div>
+      ) : null}
+    </div>
   );
 }
 
@@ -310,13 +855,57 @@ function SelectControl({ label, value, options, disabled, onChange }) {
   );
 }
 
-function PreviewPlayer({ label, src, disabled, variant }) {
+function RangeControl({ label, value, min = 0, max = 100, disabled, onChange }) {
+  const numericValue = Number.isFinite(value) ? value : 0;
+  const [draft, setDraft] = useState(numericValue);
+
+  useEffect(() => {
+    setDraft(numericValue);
+  }, [numericValue]);
+
+  const commit = (nextValue) => {
+    if (Number(nextValue) !== numericValue) onChange(Number(nextValue));
+  };
+
+  return (
+    <label className="block">
+      <span className="mb-2 flex items-center justify-between gap-3 text-xs font-semibold uppercase tracking-[0.12em] text-zinc-500">
+        <span>{label}</span>
+        <span className="normal-case tracking-normal text-zinc-300">{formatRangeValue(draft, min)}</span>
+      </span>
+      <input
+        type="range"
+        min={min}
+        max={max}
+        step={1}
+        value={draft}
+        disabled={disabled}
+        onChange={(event) => setDraft(Number(event.target.value))}
+        onPointerUp={(event) => commit(event.currentTarget.value)}
+        onBlur={(event) => commit(event.currentTarget.value)}
+        className="w-full accent-teal-300 disabled:opacity-50"
+      />
+    </label>
+  );
+}
+
+function PreviewPlayer({ label, src, disabled, variant, volume = 1, volumeLabel = "" }) {
+  const audioRef = useRef(null);
+  useEffect(() => {
+    if (audioRef.current) {
+      audioRef.current.volume = Math.max(0, Math.min(1, volume));
+    }
+  }, [volume, src]);
+
   return (
     <div>
-      <p className="mb-2 text-xs font-semibold uppercase tracking-[0.12em] text-zinc-500">{label}</p>
+      <div className="mb-2 flex items-center justify-between gap-3">
+        <p className="text-xs font-semibold uppercase tracking-[0.12em] text-zinc-500">{label}</p>
+        {volumeLabel ? <span className="text-xs text-zinc-500">{volumeLabel}</span> : null}
+      </div>
       <div className="space-y-2 rounded-lg border border-white/10 bg-black/20 p-3">
         <WaveformPreview src={src} disabled={disabled || !src} variant={variant} />
-        {src && !disabled ? <audio src={src} controls className="h-9 w-full" /> : <p className="py-2 text-sm text-zinc-500">No preview yet.</p>}
+        {src && !disabled ? <audio ref={audioRef} src={src} controls className="h-9 w-full" /> : <p className="py-2 text-sm text-zinc-500">No preview yet.</p>}
       </div>
     </div>
   );
@@ -338,9 +927,151 @@ function vocalSettings(stem) {
     pitchCorrection: "Off",
     key: "Auto",
     scale: "Major",
+    fxStyle: "Natural Plate",
+    fxAmount: 25,
+    bodyAmount: 0,
+    presenceAmount: 0,
+    airAmount: 0,
+    deEssAmount: 50,
+    compressionAmount: 50,
+    riderAmount: 50,
+    saturationAmount: 50,
+    doublerAmount: 50,
+    breathReductionAmount: 35,
+    mouthClickReductionAmount: 30,
+    pitchStrength: 50,
+    pitchHumanize: 60,
     useEnhancedInMix: true,
     ...(stem.vocalEnhancementSettings || {}),
   };
+}
+
+function presetSettingsFromStem(stem) {
+  const settings = vocalSettings(stem);
+  const keys = [
+    "preset",
+    "pitchCorrection",
+    "key",
+    "scale",
+    "fxStyle",
+    "fxAmount",
+    "bodyAmount",
+    "presenceAmount",
+    "airAmount",
+    "deEssAmount",
+    "compressionAmount",
+    "riderAmount",
+    "saturationAmount",
+    "doublerAmount",
+    "breathReductionAmount",
+    "mouthClickReductionAmount",
+    "pitchStrength",
+    "pitchHumanize",
+  ];
+  return Object.fromEntries(keys.map((key) => [key, settings[key]]));
+}
+
+function latestMixVersion(project) {
+  const versions = project?.mixSettings?.mixVersions || [];
+  if (!versions.length) return null;
+  const latestId = project?.mixSettings?.latestMixVersionId;
+  const version = versions.find((item) => item.id === latestId) || versions[versions.length - 1];
+  return {
+    id: version.id,
+    label: version.label || `Mix v${String(version.versionNumber).padStart(3, "0")}`,
+    url: version.mp3Url || version.wavUrl,
+    path: version.mp3Path || version.wavPath,
+  };
+}
+
+function formatRangeValue(value, min) {
+  if (min < 0) return signedPercent(value);
+  return `${Math.round(value)}%`;
+}
+
+function signedPercent(value) {
+  if (!Number.isFinite(value)) return "--";
+  return `${value > 0 ? "+" : ""}${Math.round(value)}%`;
+}
+
+function formatRecommendedValue(key, value) {
+  if (value === undefined || value === null || value === "") return "--";
+  if (["bodyAmount", "presenceAmount", "airAmount"].includes(key)) return signedPercent(Number(value));
+  if (["vocalBoost", "vocalBusLevel"].includes(key)) return formatDb(Number(value));
+  if (typeof value === "number") return `${Math.round(value)}%`;
+  if (typeof value === "boolean") return value ? "On" : "Off";
+  return value;
+}
+
+function doctorPatchLabel(key) {
+  const labels = {
+    enabled: "Enable",
+    preset: "Preset",
+    pitchCorrection: "Pitch",
+    key: "Key",
+    scale: "Scale",
+    fxStyle: "FX",
+    fxAmount: "FX Amount",
+    bodyAmount: "Body",
+    presenceAmount: "Presence",
+    airAmount: "Air",
+    deEssAmount: "De-ess",
+    compressionAmount: "Comp",
+    riderAmount: "Rider",
+    saturationAmount: "Saturation",
+    doublerAmount: "Doubler",
+    breathReductionAmount: "Breath",
+    mouthClickReductionAmount: "Clicks",
+    pitchStrength: "Pitch Strength",
+    pitchHumanize: "Humanize",
+    useEnhancedInMix: "Use In Mix",
+    vocalBoost: "Vocal Boost",
+    vocalBusLevel: "Bus Level",
+    vocalGlueAmount: "Glue",
+    vocalDelayAmount: "Delay",
+    vocalReverbAmount: "Reverb",
+    reverbAmount: "Global Reverb",
+  };
+  return labels[key] || key;
+}
+
+function doctorScoreClass(score) {
+  if (score < 55) return "border-rose-300/25 bg-rose-400/10 text-rose-100";
+  if (score < 75) return "border-amber-300/25 bg-amber-300/10 text-amber-100";
+  return "border-emerald-300/25 bg-emerald-300/10 text-emerald-100";
+}
+
+function severityClass(severity) {
+  if (severity === "High") return "border-rose-300/25 bg-rose-400/10 text-rose-100";
+  if (severity === "Medium") return "border-amber-300/25 bg-amber-300/10 text-amber-100";
+  return "border-cyan-300/20 bg-cyan-300/10 text-cyan-100";
+}
+
+function formatDelta(value, suffix = "") {
+  if (!Number.isFinite(value)) return "--";
+  return `${value > 0 ? "+" : ""}${Number(value).toFixed(1)}${suffix}`;
+}
+
+function loudnessMatchedVolumes(result) {
+  const sourceLufs = result.originalMetrics?.integratedLufs;
+  const enhancedLufs = result.enhancedMetrics?.integratedLufs;
+  if (!Number.isFinite(sourceLufs) || !Number.isFinite(enhancedLufs)) {
+    return { source: 1, enhanced: 1, sourceLabel: "", enhancedLabel: "" };
+  }
+  const delta = enhancedLufs - sourceLufs;
+  if (Math.abs(delta) < 0.2) {
+    return { source: 1, enhanced: 1, sourceLabel: "matched", enhancedLabel: "matched" };
+  }
+  if (delta > 0) {
+    const enhanced = dbToVolume(-delta);
+    return { source: 1, enhanced, sourceLabel: "0.0 dB", enhancedLabel: `${(-delta).toFixed(1)} dB` };
+  }
+  const source = dbToVolume(delta);
+  return { source, enhanced: 1, sourceLabel: `${delta.toFixed(1)} dB`, enhancedLabel: "0.0 dB" };
+}
+
+function dbToVolume(db) {
+  return Math.max(0.05, Math.min(1, Math.pow(10, db / 20)));
 }
 
 function sourcePreviewUrl(stem) {

@@ -3,7 +3,7 @@ import re
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import imageio_ffmpeg
 import librosa  # Imported to keep the Phase 2 audio stack ready for later feature extraction.
@@ -18,6 +18,14 @@ ANALYSIS_FALLBACK_SAMPLE_RATE = 44100
 ROUGH_MIX_SAMPLE_RATE = 44100
 DETECTION_SAMPLE_RATE = 22050
 DETECTION_MAX_SECONDS = 60
+
+ProgressCallback = Callable[[float, str], None]
+
+
+def _progress(progress_callback: ProgressCallback | None, fraction: float, message: str) -> None:
+    if progress_callback is None:
+        return
+    progress_callback(max(0.0, min(1.0, fraction)), message)
 
 
 @dataclass
@@ -178,24 +186,29 @@ def validate_audio_file(path: Path) -> dict[str, int]:
     return _probe_audio(path)
 
 
-def analyze_audio_file(path: Path) -> dict:
+def analyze_audio_file(path: Path, progress_callback: ProgressCallback | None = None) -> dict:
     ensure_audio_environment()
+    _progress(progress_callback, 0.08, "Probing audio stream")
     info = _probe_audio(path)
+    _progress(progress_callback, 0.28, "Decoding audio samples")
     decoded = _decode_audio(path, sample_rate=info["sampleRate"], channels=info["channels"])
     audio = decoded.samples
 
     if audio.size == 0:
         raise ValueError("Decoded audio is empty.")
 
+    _progress(progress_callback, 0.72, "Measuring loudness and warnings")
     return _analyze_samples(audio, decoded.sample_rate)
 
 
-def clean_audio_file(path: Path, output_path: Path, stem_type: str, mode: str, hum_removal: bool = False, hum_frequency: int = 60) -> CleanedAudioResult:
+def clean_audio_file(path: Path, output_path: Path, stem_type: str, mode: str, hum_removal: bool = False, hum_frequency: int = 60, progress_callback: ProgressCallback | None = None) -> CleanedAudioResult:
     ensure_audio_environment()
     if mode == "Off":
         raise ValueError("Cleaning mode is Off.")
 
+    _progress(progress_callback, 0.05, "Probing source stem")
     info = _probe_audio(path)
+    _progress(progress_callback, 0.15, "Decoding source stem")
     decoded = _decode_audio(path, sample_rate=info["sampleRate"], channels=info["channels"])
     audio = decoded.samples.astype(np.float32, copy=True)
     params = _cleaning_parameters(stem_type, mode)
@@ -207,42 +220,53 @@ def clean_audio_file(path: Path, output_path: Path, stem_type: str, mode: str, h
 
     preset_name = stem_type if stem_type != "Unknown" else "general"
     operations.append(f"{mode} {preset_name} cleaning preset")
+    _progress(progress_callback, 0.25, "Measuring original noise profile")
     original_metrics = _cleaning_metric_subset(_analyze_samples(audio, decoded.sample_rate))
 
     if hum_removal:
+        _progress(progress_callback, 0.34, "Reducing electrical hum")
         audio = _remove_hum(audio, decoded.sample_rate, hum_frequency, params["humStrength"])
         operations.append(f"{hum_frequency} Hz hum reduction")
 
     if params["highPassHz"]:
+        _progress(progress_callback, 0.42, "Applying high-pass cleanup")
         audio = _high_pass(audio, decoded.sample_rate, params["highPassHz"])
         operations.append(f"high-pass filter at {params['highPassHz']} Hz")
 
     if params["plosiveReduction"]:
+        _progress(progress_callback, 0.50, "Reducing plosives")
         audio = _reduce_plosives(audio, decoded.sample_rate, params["plosiveReduction"])
         operations.append("plosive reduction")
 
     if params["noiseReduction"]:
+        _progress(progress_callback, 0.58, "Building noise reduction profile")
         noise_profile = _noise_profile(audio, decoded.sample_rate)
+        _progress(progress_callback, 0.64, "Reducing noise")
         audio = _reduce_noise(audio, decoded.sample_rate, params["noiseReduction"], noise_profile=noise_profile)
         operations.append("profile-based noise reduction" if noise_profile is not None else "adaptive noise reduction")
 
     if params["noiseGate"]:
+        _progress(progress_callback, 0.70, "Applying noise gate")
         audio = _noise_gate(audio, decoded.sample_rate, params["noiseGate"], params["gateFloor"])
         operations.append("noise gate")
 
     if params["deEss"]:
+        _progress(progress_callback, 0.76, "Softening harsh sibilance")
         audio = _de_ess(audio, decoded.sample_rate, params["deEss"])
         operations.append("de-esser")
 
     if params["compressionPrep"]:
+        _progress(progress_callback, 0.82, "Preparing dynamics")
         audio = _compression_prepare(audio, params["compressionPrep"])
         operations.append("light compression preparation")
 
     if params["clickReduction"]:
+        _progress(progress_callback, 0.86, "Reducing clicks and pops")
         audio = _reduce_clicks(audio, params["clickReduction"])
         operations.append("click/pop reduction")
 
     if params["tailCleanup"]:
+        _progress(progress_callback, 0.90, "Cleaning silent tail")
         audio = _cleanup_silent_tail(audio, decoded.sample_rate)
         operations.append("silence tail cleanup")
         warnings.append("Leading silence is preserved so stems stay aligned in the mix.")
@@ -251,8 +275,10 @@ def clean_audio_file(path: Path, output_path: Path, stem_type: str, mode: str, h
     audio = np.clip(audio, -0.98, 0.98).astype(np.float32, copy=False)
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
+    _progress(progress_callback, 0.94, "Writing cleaned WAV")
     _encode_float_audio(audio, output_path, codec_args=["-c:a", "pcm_s16le"], sample_rate=decoded.sample_rate)
 
+    _progress(progress_callback, 0.98, "Measuring cleaned stem")
     cleaned_metrics = _cleaning_metric_subset(_analyze_samples(audio, decoded.sample_rate))
     metric_deltas = _metric_deltas(original_metrics, cleaned_metrics)
     return CleanedAudioResult(
@@ -268,78 +294,144 @@ def clean_audio_file(path: Path, output_path: Path, stem_type: str, mode: str, h
     )
 
 
-def enhance_vocal_file(path: Path, output_path: Path, preset: str, pitch_correction: str, key: str = "Auto", scale: str = "Major") -> VocalEnhancementAudioResult:
+def enhance_vocal_file(
+    path: Path,
+    output_path: Path,
+    preset: str,
+    pitch_correction: str,
+    key: str = "Auto",
+    scale: str = "Major",
+    fx_style: str = "Natural Plate",
+    fx_amount: float = 25,
+    body_amount: float = 0,
+    presence_amount: float = 0,
+    air_amount: float = 0,
+    de_ess_amount: float = 50,
+    compression_amount: float = 50,
+    rider_amount: float = 50,
+    saturation_amount: float = 50,
+    doubler_amount: float = 50,
+    breath_reduction_amount: float = 35,
+    mouth_click_reduction_amount: float = 30,
+    pitch_strength: float = 50,
+    pitch_humanize: float = 60,
+    progress_callback: ProgressCallback | None = None,
+) -> VocalEnhancementAudioResult:
     ensure_audio_environment()
+    _progress(progress_callback, 0.04, "Probing vocal source")
     info = _probe_audio(path)
+    _progress(progress_callback, 0.10, "Decoding vocal source")
     decoded = _decode_audio(path, sample_rate=info["sampleRate"], channels=2)
     audio = decoded.samples.astype(np.float32, copy=True)
     params = _vocal_enhancer_parameters(preset)
     operations: list[str] = [f"{preset} vocal enhancer preset"]
     warnings: list[str] = []
 
+    _progress(progress_callback, 0.16, "Measuring original vocal")
     original_metrics = _cleaning_metric_subset(_analyze_samples(audio, decoded.sample_rate))
 
+    _progress(progress_callback, 0.22, "Applying vocal high-pass")
     audio = _high_pass(audio, decoded.sample_rate, params["highPassHz"])
     operations.append(f"vocal high-pass at {params['highPassHz']} Hz")
 
     if params["noiseReduction"] > 0:
+        _progress(progress_callback, 0.28, "Reducing vocal noise")
         noise_profile = _noise_profile(audio, decoded.sample_rate)
         audio = _reduce_noise(audio, decoded.sample_rate, params["noiseReduction"], noise_profile=noise_profile)
         operations.append("light vocal noise reduction")
 
+    mouth_clicks = _scale_preset_amount(params["mouthClickReduction"], mouth_click_reduction_amount, max_value=0.8)
+    if mouth_clicks > 0:
+        _progress(progress_callback, 0.34, "Softening mouth clicks")
+        audio = _reduce_clicks(audio, mouth_clicks)
+        operations.append(f"mouth click softener ({int(round(mouth_click_reduction_amount))}%)")
+
+    breath_reduction = _scale_preset_amount(params["breathReduction"], breath_reduction_amount, max_value=0.9)
+    if breath_reduction > 0:
+        _progress(progress_callback, 0.40, "Softening breaths")
+        audio = _reduce_breaths(audio, decoded.sample_rate, breath_reduction)
+        operations.append(f"breath softener ({int(round(breath_reduction_amount))}%)")
+
     if pitch_correction != "Off":
-        audio, pitch_operation, pitch_warning = _pitch_polish(audio, decoded.sample_rate, pitch_correction, key, scale)
+        _progress(progress_callback, 0.48, "Applying pitch polish")
+        audio, pitch_operation, pitch_warning = _pitch_polish(audio, decoded.sample_rate, pitch_correction, key, scale, pitch_strength, pitch_humanize)
         operations.append(pitch_operation)
         if pitch_warning:
             warnings.append(pitch_warning)
 
-    if params["deEss"] > 0:
-        audio = _de_ess(audio, decoded.sample_rate, params["deEss"])
-        operations.append("studio de-esser")
+    de_ess = _scale_preset_amount(params["deEss"], de_ess_amount, max_value=0.95)
+    if de_ess > 0:
+        _progress(progress_callback, 0.56, "Applying vocal de-esser")
+        audio = _de_ess(audio, decoded.sample_rate, de_ess)
+        operations.append(f"studio de-esser ({int(round(de_ess_amount))}%)")
 
-    if params["rider"] > 0:
-        audio = _vocal_rider(audio, decoded.sample_rate, params["rider"])
-        operations.append("automatic vocal rider")
+    rider = _scale_preset_amount(params["rider"], rider_amount, max_value=0.95)
+    if rider > 0:
+        _progress(progress_callback, 0.62, "Leveling vocal dynamics")
+        audio = _vocal_rider(audio, decoded.sample_rate, rider)
+        operations.append(f"automatic vocal rider ({int(round(rider_amount))}%)")
 
-    if params["bodyDb"]:
-        audio = _eq_band(audio, decoded.sample_rate, 160, 360, params["bodyDb"])
-        operations.append("vocal body EQ")
+    body_db = params["bodyDb"] + max(-50.0, min(50.0, body_amount)) / 50.0 * 1.6
+    if body_db:
+        _progress(progress_callback, 0.68, "Shaping vocal body")
+        audio = _eq_band(audio, decoded.sample_rate, 160, 360, body_db)
+        operations.append(f"vocal body EQ ({body_db:+.1f} dB)")
 
-    if params["presenceDb"]:
-        audio = _eq_band(audio, decoded.sample_rate, 2500, 5600, params["presenceDb"])
-        operations.append("vocal presence EQ")
+    presence_db = params["presenceDb"] + max(-50.0, min(50.0, presence_amount)) / 50.0 * 2.0
+    if presence_db:
+        _progress(progress_callback, 0.72, "Adding vocal presence")
+        audio = _eq_band(audio, decoded.sample_rate, 2500, 5600, presence_db)
+        operations.append(f"vocal presence EQ ({presence_db:+.1f} dB)")
 
-    if params["airDb"]:
-        audio = _eq_band(audio, decoded.sample_rate, 7200, min(15000, decoded.sample_rate / 2 - 200), params["airDb"])
-        operations.append("vocal air enhancer")
+    air_db = params["airDb"] + max(-50.0, min(50.0, air_amount)) / 50.0 * 2.2
+    if air_db:
+        _progress(progress_callback, 0.76, "Adding vocal air")
+        audio = _eq_band(audio, decoded.sample_rate, 7200, min(15000, decoded.sample_rate / 2 - 200), air_db)
+        operations.append(f"vocal air enhancer ({air_db:+.1f} dB)")
 
-    if params["compression"] > 0:
-        audio = _compress_audio(audio, threshold_db=params["compressionThresholdDb"], ratio=params["compressionRatio"], mix=params["compression"])
-        operations.append("studio vocal compression")
+    compression = _scale_preset_amount(params["compression"], compression_amount, max_value=0.95)
+    if compression > 0:
+        _progress(progress_callback, 0.80, "Compressing vocal")
+        threshold_adjust = (50.0 - max(0.0, min(100.0, compression_amount))) / 100.0 * 4.0
+        audio = _compress_audio(audio, threshold_db=params["compressionThresholdDb"] + threshold_adjust, ratio=params["compressionRatio"], mix=compression)
+        operations.append(f"studio vocal compression ({int(round(compression_amount))}%)")
 
-    if params["saturation"] > 0:
-        audio = _saturate(audio, drive=1.08 + params["saturation"] * 0.9, mix=params["saturation"])
-        operations.append("subtle vocal saturation")
+    saturation = _scale_preset_amount(params["saturation"], saturation_amount, max_value=0.22)
+    if saturation > 0:
+        _progress(progress_callback, 0.84, "Adding subtle saturation")
+        audio = _saturate(audio, drive=1.08 + saturation * 3.5, mix=saturation)
+        operations.append(f"subtle vocal saturation ({int(round(saturation_amount))}%)")
 
-    if params["doubler"] > 0:
-        audio = _vocal_doubler(audio, decoded.sample_rate, params["doubler"])
-        operations.append("subtle vocal doubler")
+    doubler = max(0.0, min(0.35, params["doubler"] + (max(0.0, min(100.0, doubler_amount)) - 50.0) / 50.0 * 0.12))
+    if doubler > 0:
+        _progress(progress_callback, 0.87, "Applying vocal doubler")
+        audio = _vocal_doubler(audio, decoded.sample_rate, doubler)
+        operations.append(f"subtle vocal doubler ({int(round(doubler_amount))}%)")
 
     if params["width"] != 0:
+        _progress(progress_callback, 0.90, "Polishing stereo image")
         audio = _apply_width(audio, params["width"])
         operations.append("vocal stereo polish")
 
+    if fx_style != "Dry" and fx_amount > 0:
+        _progress(progress_callback, 0.92, "Adding vocal effects")
+        audio = _apply_vocal_fx(audio, decoded.sample_rate, fx_style, fx_amount)
+        operations.append(f"{fx_style} vocal FX send at {int(round(fx_amount))}%")
+
+    _progress(progress_callback, 0.94, "Applying vocal safety level")
     audio = _final_vocal_level(audio, target_peak_db=-1.6)
     operations.append("vocal safety level")
     audio = np.nan_to_num(audio, nan=0.0, posinf=0.0, neginf=0.0)
     audio = np.clip(audio, -0.98, 0.98).astype(np.float32, copy=False)
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
+    _progress(progress_callback, 0.96, "Writing enhanced vocal")
     _encode_float_audio(audio, output_path, codec_args=["-c:a", "pcm_s16le"], sample_rate=decoded.sample_rate)
 
+    _progress(progress_callback, 0.99, "Measuring enhanced vocal")
     enhanced_metrics = _cleaning_metric_subset(_analyze_samples(audio, decoded.sample_rate))
     metric_deltas = _metric_deltas(original_metrics, enhanced_metrics)
-    if params["doubler"] > 0:
+    if doubler > 0:
         warnings.append("Doubler adds width; keep lead vocals mostly centered in the mixer for clarity.")
     if pitch_correction == "Strong":
         warnings.append("Strong pitch polish can sound artificial on live vocals; compare before mixing.")
@@ -437,6 +529,92 @@ def extract_stem_detection_features(path: Path) -> dict[str, float | int | None]
     }
 
 
+def analyze_vocal_file(path: Path) -> dict[str, Any]:
+    ensure_audio_environment()
+    info = _probe_audio(path)
+    decoded = _decode_audio(path, sample_rate=info["sampleRate"], channels=min(info["channels"], 2))
+    audio = decoded.samples.astype(np.float32, copy=False)
+    metrics = _cleaning_metric_subset(_analyze_samples(audio, decoded.sample_rate))
+
+    analysis_sample_rate = min(DETECTION_SAMPLE_RATE, decoded.sample_rate)
+    analysis_audio = audio
+    if decoded.sample_rate != analysis_sample_rate:
+        analysis_audio = signal.resample_poly(audio, up=analysis_sample_rate, down=decoded.sample_rate, axis=0).astype(np.float32, copy=False)
+
+    max_samples = analysis_sample_rate * DETECTION_MAX_SECONDS
+    if analysis_audio.shape[0] > max_samples:
+        analysis_audio = analysis_audio[:max_samples]
+
+    mono = np.mean(analysis_audio, axis=1).astype(np.float32, copy=False)
+    if mono.size < 1024:
+        raise ValueError("Not enough audio to analyze vocal tone.")
+
+    stft = np.abs(librosa.stft(mono, n_fft=2048, hop_length=512))
+    power = np.square(stft)
+    total_energy = float(np.sum(power)) + 1e-12
+    freqs = librosa.fft_frequencies(sr=analysis_sample_rate, n_fft=2048)
+
+    frame_rms = librosa.feature.rms(y=mono, frame_length=2048, hop_length=512)[0]
+    audible = frame_rms[frame_rms > _db_to_linear(-55)]
+    if audible.size:
+        frame_db = np.array([_linear_to_db(float(value)) for value in audible])
+        level_spread_db = float(np.percentile(frame_db, 95) - np.percentile(frame_db, 20))
+    else:
+        level_spread_db = 0.0
+
+    harmonic_ratio = None
+    try:
+        harmonic, percussive = librosa.effects.hpss(mono)
+        harmonic_rms = float(np.sqrt(np.mean(np.square(harmonic, dtype=np.float64))))
+        percussive_rms = float(np.sqrt(np.mean(np.square(percussive, dtype=np.float64))))
+        harmonic_ratio = harmonic_rms / (harmonic_rms + percussive_rms + 1e-12)
+    except Exception:
+        pass
+
+    spectral_centroid = librosa.feature.spectral_centroid(S=stft, sr=analysis_sample_rate)
+    spectral_flatness = librosa.feature.spectral_flatness(S=np.maximum(stft, 1e-12))
+    zero_crossing_rate = librosa.feature.zero_crossing_rate(mono)
+
+    stereo_width = 0.0
+    if analysis_audio.shape[1] == 2:
+        left = analysis_audio[:, 0]
+        right = analysis_audio[:, 1]
+        mid = (left + right) * 0.5
+        side = (left - right) * 0.5
+        mid_rms = float(np.sqrt(np.mean(np.square(mid, dtype=np.float64)))) + 1e-12
+        side_rms = float(np.sqrt(np.mean(np.square(side, dtype=np.float64))))
+        stereo_width = min(1.0, side_rms / mid_rms)
+
+    body_ratio = _band_energy_ratio(power, freqs, 120, 320, total_energy)
+    mud_ratio = _band_energy_ratio(power, freqs, 180, 520, total_energy)
+    presence_ratio = _band_energy_ratio(power, freqs, 2400, 5600, total_energy)
+    harshness_ratio = _band_energy_ratio(power, freqs, 3200, 7200, total_energy)
+    sibilance_ratio = _band_energy_ratio(power, freqs, 5500, 9500, total_energy)
+    air_ratio = _band_energy_ratio(power, freqs, 9500, min(15000, analysis_sample_rate / 2), total_energy)
+    low_rumble_ratio = _band_energy_ratio(power, freqs, 20, 100, total_energy)
+    estimated_key, estimated_scale, key_confidence = _estimate_key_and_scale(mono, analysis_sample_rate)
+
+    return {
+        **metrics,
+        "spectralCentroidHz": _round(float(np.mean(spectral_centroid))),
+        "spectralFlatness": _round(float(np.mean(spectral_flatness)), 5),
+        "zeroCrossingRate": _round(float(np.mean(zero_crossing_rate)), 5),
+        "harmonicRatio": _round(harmonic_ratio, 5),
+        "levelSpreadDb": _round(level_spread_db),
+        "bodyRatio": _round(body_ratio, 5),
+        "mudRatio": _round(mud_ratio, 5),
+        "presenceRatio": _round(presence_ratio, 5),
+        "harshnessRatio": _round(harshness_ratio, 5),
+        "sibilanceRatio": _round(sibilance_ratio, 5),
+        "airRatio": _round(air_ratio, 5),
+        "lowRumbleRatio": _round(low_rumble_ratio, 5),
+        "stereoWidth": _round(stereo_width, 5),
+        "estimatedKey": estimated_key,
+        "estimatedScale": estimated_scale,
+        "keyConfidence": _round(key_confidence),
+    }
+
+
 def generate_rough_mix(stem_inputs: list[dict], output_dir: Path) -> RoughMixResult:
     ensure_audio_environment()
     if not stem_inputs:
@@ -492,11 +670,12 @@ def generate_rough_mix(stem_inputs: list[dict], output_dir: Path) -> RoughMixRes
     )
 
 
-def generate_advanced_mix(stem_inputs: list[dict], output_dir: Path, version_number: int, controls: dict) -> AdvancedMixResult:
+def generate_advanced_mix(stem_inputs: list[dict], output_dir: Path, version_number: int, controls: dict, progress_callback: ProgressCallback | None = None) -> AdvancedMixResult:
     ensure_audio_environment()
     if not stem_inputs:
         raise ValueError("No audible stems are available for advanced mix generation.")
 
+    _progress(progress_callback, 0.03, "Preparing mix render")
     output_dir.mkdir(parents=True, exist_ok=True)
     processed_tracks: list[tuple[np.ndarray, np.ndarray, dict]] = []
     source_files: list[dict] = []
@@ -504,9 +683,11 @@ def generate_advanced_mix(stem_inputs: list[dict], output_dir: Path, version_num
     errors: list[str] = []
     max_length = 0
 
-    for item in stem_inputs:
+    total_inputs = len(stem_inputs)
+    for index, item in enumerate(stem_inputs, start=1):
         filename = item.get("filename", "stem")
         try:
+            _progress(progress_callback, 0.05 + ((index - 1) / total_inputs) * 0.40, f"Processing stem {filename}")
             decoded = _decode_audio(item["path"], sample_rate=ROUGH_MIX_SAMPLE_RATE, channels=2)
             dry, send = _process_advanced_stem(decoded.samples.astype(np.float32, copy=False), decoded.sample_rate, item, controls, warnings)
             if dry.size == 0:
@@ -529,6 +710,7 @@ def generate_advanced_mix(stem_inputs: list[dict], output_dir: Path, version_num
                     "compressionAmount": _round(float(item.get("compressionAmount", 50))),
                 }
             )
+            _progress(progress_callback, 0.05 + (index / total_inputs) * 0.40, f"Processed stem {filename}")
         except Exception as exc:
             message = f"{filename}: {str(exc) or 'processing failed'}"
             errors.append(message)
@@ -537,37 +719,47 @@ def generate_advanced_mix(stem_inputs: list[dict], output_dir: Path, version_num
     if not processed_tracks or max_length == 0:
         raise ValueError("No stems could be processed for the advanced mix.")
 
+    _progress(progress_callback, 0.50, "Building mix buses")
     mix = np.zeros((max_length, 2), dtype=np.float32)
     vocal_send = np.zeros_like(mix)
     drum_send = np.zeros_like(mix)
     space_send = np.zeros_like(mix)
     vocal_focus_bus = np.zeros_like(mix)
+    vocal_bus = np.zeros_like(mix)
 
     for dry, _send, item in processed_tracks:
         if item.get("stemType") == "Lead Vocal":
             _add_to_bus(vocal_focus_bus, dry)
 
-    for dry, send, item in processed_tracks:
+    for index, (dry, send, item) in enumerate(processed_tracks, start=1):
+        _progress(progress_callback, 0.55 + ((index - 1) / len(processed_tracks)) * 0.18, f"Summing {item.get('filename', 'stem')}")
         stem_type = item.get("stemType", "Unknown")
         if stem_type in {"Electric Guitar", "Acoustic Guitar", "Keys/Piano", "Pads/Strings", "FX/Ambience"} and np.any(vocal_focus_bus):
             duck_amount = 0.7 + max(0.0, float(controls.get("vocalBoost", 0))) * 0.18
             dry = _apply_vocal_ducking(dry, vocal_focus_bus[: dry.shape[0]], ROUGH_MIX_SAMPLE_RATE, duck_amount)
             send = _apply_vocal_ducking(send, vocal_focus_bus[: send.shape[0]], ROUGH_MIX_SAMPLE_RATE, duck_amount * 0.55)
-        _add_to_bus(mix, dry)
         if stem_type in {"Lead Vocal", "Backing Vocal"}:
+            _add_to_bus(vocal_bus, dry)
             _add_to_bus(vocal_send, send)
             delay_amount = _stem_delay_amount(stem_type, float(item.get("delaySend", 0)), controls)
             if delay_amount > 0.01:
                 _add_to_bus(mix, _delay_effect(dry, ROUGH_MIX_SAMPLE_RATE, delay_seconds=0.24, feedback=0.22, amount=delay_amount))
         elif stem_type in {"Drums", "Kick", "Snare"}:
+            _add_to_bus(mix, dry)
             _add_to_bus(drum_send, send)
         else:
+            _add_to_bus(mix, dry)
             _add_to_bus(space_send, send)
             delay_amount = _stem_delay_amount(stem_type, float(item.get("delaySend", 0)), controls)
             if delay_amount > 0.01:
                 delay_seconds = 0.18 if stem_type in {"Electric Guitar", "Acoustic Guitar"} else 0.31
                 _add_to_bus(space_send, _delay_effect(dry, ROUGH_MIX_SAMPLE_RATE, delay_seconds=delay_seconds, feedback=0.18, amount=delay_amount))
 
+    _progress(progress_callback, 0.74, "Processing vocal bus and sends")
+    if np.any(vocal_bus):
+        _add_to_bus(mix, _process_vocal_mix_bus(vocal_bus, ROUGH_MIX_SAMPLE_RATE, controls, warnings))
+
+    _progress(progress_callback, 0.80, "Adding shared space effects")
     room_size = _control_ratio(controls, "roomSize")
     global_reverb = _control_ratio(controls, "reverbAmount")
     vocal_reverb = _control_ratio(controls, "vocalReverbAmount")
@@ -575,6 +767,7 @@ def generate_advanced_mix(stem_inputs: list[dict], output_dir: Path, version_num
     _add_to_bus(mix, _simple_reverb(drum_send, ROUGH_MIX_SAMPLE_RATE, amount=0.13 * global_reverb, room_size=0.25 + room_size * 0.25))
     _add_to_bus(mix, _simple_reverb(space_send, ROUGH_MIX_SAMPLE_RATE, amount=0.24 * global_reverb, room_size=0.55 + room_size * 0.55))
 
+    _progress(progress_callback, 0.84, "Applying mix tone and safety")
     mix = _apply_master_tone(mix, ROUGH_MIX_SAMPLE_RATE, controls)
     mix = np.nan_to_num(mix, nan=0.0, posinf=0.0, neginf=0.0)
 
@@ -592,15 +785,18 @@ def generate_advanced_mix(stem_inputs: list[dict], output_dir: Path, version_num
     mp3_path = output_dir / f"{label}.mp3"
     metadata_path = output_dir / f"{label}.json"
 
+    _progress(progress_callback, 0.90, "Writing mix WAV")
     _encode_float_audio(mix, wav_path, codec_args=["-c:a", "pcm_s16le"])
 
     mp3_error = None
     try:
+        _progress(progress_callback, 0.95, "Writing mix MP3")
         _encode_float_audio(mix, mp3_path, codec_args=["-c:a", "libmp3lame", "-q:a", "2"])
     except Exception as exc:
         mp3_error = str(exc) or "MP3 encode failed."
         mp3_path = None
 
+    _progress(progress_callback, 0.98, "Measuring finished mix")
     metrics = _analyze_samples(mix, ROUGH_MIX_SAMPLE_RATE)
     return AdvancedMixResult(
         wav_path=wav_path,
@@ -617,15 +813,18 @@ def generate_advanced_mix(stem_inputs: list[dict], output_dir: Path, version_num
     )
 
 
-def master_audio_file(input_path: Path, output_path: Path, output_format: str, controls: dict, target_lufs: float, true_peak_ceiling_db: float = -1.0) -> MasteringAudioResult:
+def master_audio_file(input_path: Path, output_path: Path, output_format: str, controls: dict, target_lufs: float, true_peak_ceiling_db: float = -1.0, progress_callback: ProgressCallback | None = None) -> MasteringAudioResult:
     ensure_audio_environment()
+    _progress(progress_callback, 0.04, "Probing selected mix")
     info = _probe_audio(input_path)
+    _progress(progress_callback, 0.12, "Decoding selected mix")
     decoded = _decode_audio(input_path, sample_rate=info["sampleRate"], channels=2)
     audio = decoded.samples.astype(np.float32, copy=True)
     operations: list[str] = []
     warnings: list[str] = []
     errors: list[str] = []
 
+    _progress(progress_callback, 0.22, "Measuring input loudness")
     input_metrics = _analyze_samples(audio, decoded.sample_rate)
     preset = str(controls.get("preset", "Streaming"))
     if target_lufs >= -9:
@@ -634,12 +833,14 @@ def master_audio_file(input_path: Path, output_path: Path, output_format: str, c
         warnings.append("Very Loud mastering is aggressive; compare carefully against the unmastered mix.")
 
     try:
+        _progress(progress_callback, 0.34, "Applying master cleanup")
         audio = _high_pass(audio, decoded.sample_rate, 24)
         operations.append("subsonic cleanup high-pass")
     except Exception as exc:
         errors.append(f"Master high-pass failed: {str(exc) or 'unknown error'}")
 
     try:
+        _progress(progress_callback, 0.44, "Applying master EQ")
         warmth = float(controls.get("warmth", 0)) / 50.0
         brightness = float(controls.get("brightness", 0)) / 50.0
         if abs(warmth) > 0.02:
@@ -652,6 +853,7 @@ def master_audio_file(input_path: Path, output_path: Path, output_format: str, c
         errors.append(f"Master EQ failed: {str(exc) or 'unknown error'}")
 
     try:
+        _progress(progress_callback, 0.56, "Applying glue compression")
         compression_amount = max(0.0, min(1.0, float(controls.get("compressionAmount", 45)) / 100.0))
         if compression_amount > 0:
             ratio = 1.4 + compression_amount * 2.4
@@ -663,6 +865,7 @@ def master_audio_file(input_path: Path, output_path: Path, output_format: str, c
         errors.append(f"Glue compression failed: {str(exc) or 'unknown error'}")
 
     try:
+        _progress(progress_callback, 0.64, "Adjusting stereo width")
         width = (float(controls.get("stereoWidth", 55)) - 50.0) / 100.0
         if abs(width) > 0.02:
             audio = _apply_width(audio, width * 0.8)
@@ -671,6 +874,7 @@ def master_audio_file(input_path: Path, output_path: Path, output_format: str, c
         errors.append(f"Stereo width failed: {str(exc) or 'unknown error'}")
 
     audio = np.nan_to_num(audio, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float32, copy=False)
+    _progress(progress_callback, 0.72, "Checking pre-limiter loudness")
     pre_loudness_metrics = _analyze_samples(audio, decoded.sample_rate)
     current_lufs = pre_loudness_metrics.get("integratedLufs")
     loudness_gain_db = 0.0
@@ -687,6 +891,7 @@ def master_audio_file(input_path: Path, output_path: Path, output_format: str, c
 
     limiter_gain_db = 0.0
     try:
+        _progress(progress_callback, 0.82, "Applying limiter and peak safety")
         limiter_strength = max(0.0, min(1.0, float(controls.get("limiterStrength", 55)) / 100.0))
         audio = _soft_limit(audio, true_peak_ceiling_db, limiter_strength)
         operations.append("mix-safe limiter")
@@ -703,8 +908,10 @@ def master_audio_file(input_path: Path, output_path: Path, output_format: str, c
 
     audio = np.clip(audio, -ceiling_linear, ceiling_linear).astype(np.float32, copy=False)
     output_path.parent.mkdir(parents=True, exist_ok=True)
+    _progress(progress_callback, 0.90, "Writing master file")
     _encode_float_audio(audio, output_path, codec_args=_codec_args_for_format(output_format), sample_rate=decoded.sample_rate)
 
+    _progress(progress_callback, 0.96, "Measuring finished master")
     output_metrics = _analyze_samples(audio, decoded.sample_rate)
     dynamic_range_db = _dynamic_range_estimate(audio, decoded.sample_rate)
     if isinstance(output_metrics.get("integratedLufs"), (int, float)) and abs(float(output_metrics["integratedLufs"]) - target_lufs) > 1.5:
@@ -1019,6 +1226,27 @@ def _reduce_clicks(audio: np.ndarray, strength: float) -> np.ndarray:
     return cleaned.astype(np.float32, copy=False)
 
 
+def _reduce_breaths(audio: np.ndarray, sample_rate: int, strength: float) -> np.ndarray:
+    strength = max(0.0, min(1.0, strength))
+    if strength <= 0 or audio.size == 0 or sample_rate < 12000:
+        return audio
+    mono = np.mean(np.abs(audio), axis=1)
+    envelope = _smooth_envelope(mono, sample_rate, 0.035)
+    high = _band_pass(audio, sample_rate, 4500, min(11000, sample_rate / 2 - 200))
+    high_env = _smooth_envelope(np.mean(np.abs(high), axis=1), sample_rate, 0.025)
+    audible = envelope[envelope > _db_to_linear(-58)]
+    if audible.size < 8:
+        return audio
+    quiet_threshold = float(np.percentile(audible, 46))
+    high_threshold = float(np.percentile(high_env, 62))
+    breath_like = (envelope < quiet_threshold) & (envelope > _db_to_linear(-55)) & (high_env > high_threshold)
+    if not np.any(breath_like):
+        return audio
+    mask = _smooth_envelope(breath_like.astype(np.float32), sample_rate, 0.045)
+    gain = 1.0 - mask * min(0.72, 0.18 + strength * 0.55)
+    return (audio * gain[:, None]).astype(np.float32, copy=False)
+
+
 def _compression_prepare(audio: np.ndarray, strength: float) -> np.ndarray:
     strength = max(0.0, min(0.7, strength))
     if strength <= 0:
@@ -1151,6 +1379,7 @@ def _advanced_chain(stem_type: str, sample_rate: int, controls: dict, compressio
     drum_punch = _control_ratio(controls, "drumPunch")
     bass_weight = _control_ratio(controls, "bassWeight")
     width = _control_ratio(controls, "width")
+    backing_width = _control_ratio(controls, "backingVocalWidth")
 
     def tone(audio: np.ndarray) -> np.ndarray:
         return _apply_stem_tone(audio, sample_rate, brightness, warmth)
@@ -1169,7 +1398,7 @@ def _advanced_chain(stem_type: str, sample_rate: int, controls: dict, compressio
             ("backing vocal high-pass", lambda audio: _high_pass(audio, sample_rate, 100)),
             ("backing vocal cleanup EQ", lambda audio: _eq_band(audio, sample_rate, 250, 500, -1.5)),
             ("backing vocal compressor", lambda audio: _compress_audio(audio, threshold_db=-24, ratio=3.0, mix=0.4 + compression_amount * 0.35)),
-            ("backing vocal spread", lambda audio: _apply_width(audio, 0.12 + width * 0.2)),
+            ("backing vocal spread", lambda audio: _apply_width(audio, 0.08 + width * 0.16 + backing_width * 0.28)),
             ("backing vocal tone", tone),
         ]
     if stem_type == "Drums":
@@ -1429,10 +1658,19 @@ def _vocal_enhancer_parameters(preset: str) -> dict[str, float]:
             "width": 0.16,
         },
     }
-    return presets.get(preset, presets["Natural Clean"])
+    params = dict(presets.get(preset, presets["Natural Clean"]))
+    params.setdefault("breathReduction", 0.18)
+    params.setdefault("mouthClickReduction", 0.16)
+    return params
 
 
-def _pitch_polish(audio: np.ndarray, sample_rate: int, mode: str, key: str, scale: str) -> tuple[np.ndarray, str, str | None]:
+def _scale_preset_amount(base_value: float, amount: float, max_value: float = 1.0) -> float:
+    amount = max(0.0, min(100.0, amount))
+    factor = 0.25 + (amount / 50.0) * 0.75
+    return max(0.0, min(max_value, base_value * factor))
+
+
+def _pitch_polish(audio: np.ndarray, sample_rate: int, mode: str, key: str, scale: str, strength: float = 50, humanize: float = 60) -> tuple[np.ndarray, str, str | None]:
     try:
         mono = np.mean(audio, axis=1).astype(np.float32, copy=False)
         if mono.size < sample_rate:
@@ -1453,14 +1691,18 @@ def _pitch_polish(audio: np.ndarray, sample_rate: int, mode: str, key: str, scal
         median_midi = float(np.median(librosa.hz_to_midi(voiced)))
         target_midi = _nearest_target_midi(median_midi, key, scale)
         semitones = target_midi - median_midi
+        strength_ratio = max(0.0, min(1.0, strength / 100.0))
+        humanize_ratio = max(0.0, min(1.0, humanize / 100.0))
         max_shift = {"Natural": 0.2, "Medium": 0.45, "Strong": 0.8}.get(mode, 0.0)
+        max_shift *= 0.45 + strength_ratio * 1.25
         semitones = max(-max_shift, min(max_shift, semitones))
+        semitones *= 1.0 - humanize_ratio * 0.55
         if abs(semitones) < 0.025:
             return audio, f"{mode} pitch polish checked", None
         shifted = np.zeros_like(audio)
         for channel in range(audio.shape[1]):
             shifted[:, channel] = librosa.effects.pitch_shift(y=audio[:, channel], sr=sample_rate, n_steps=semitones)
-        return shifted.astype(np.float32, copy=False), f"{mode} key-center pitch polish ({semitones:+.2f} st)", None
+        return shifted.astype(np.float32, copy=False), f"{mode} key-center pitch polish ({semitones:+.2f} st, strength {int(round(strength))}%, humanize {int(round(humanize))}%)", None
     except Exception as exc:
         return audio, f"{mode} pitch polish skipped", f"Pitch polish unavailable: {str(exc) or 'analysis failed'}."
 
@@ -1480,6 +1722,32 @@ def _nearest_target_midi(midi_value: float, key: str, scale: str) -> float:
         for step in scale_steps:
             candidates.append(base_octave + octave * 12 + root + step)
     return float(min(candidates, key=lambda candidate: abs(candidate - midi_value)))
+
+
+def _estimate_key_and_scale(mono: np.ndarray, sample_rate: int) -> tuple[str, str, float]:
+    try:
+        if mono.size < sample_rate:
+            return "Auto", "Major", 0.0
+        chroma = librosa.feature.chroma_stft(y=mono, sr=sample_rate, n_fft=4096, hop_length=1024)
+        profile = np.mean(chroma, axis=1)
+        if not np.any(profile):
+            return "Auto", "Major", 0.0
+        profile = profile / (np.linalg.norm(profile) + 1e-9)
+        major_template = np.array([6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88], dtype=np.float64)
+        minor_template = np.array([6.33, 2.68, 3.52, 5.38, 2.60, 3.53, 2.54, 4.75, 3.98, 2.69, 3.34, 3.17], dtype=np.float64)
+        templates = [("Major", major_template / np.linalg.norm(major_template)), ("Minor", minor_template / np.linalg.norm(minor_template))]
+        key_names = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
+        scores: list[tuple[float, str, str]] = []
+        for scale, template in templates:
+            for shift, key in enumerate(key_names):
+                scores.append((float(np.dot(profile, np.roll(template, shift))), key, scale))
+        scores.sort(reverse=True, key=lambda item: item[0])
+        best_score, key, scale = scores[0]
+        second_score = scores[1][0] if len(scores) > 1 else 0.0
+        confidence = max(0.0, min(95.0, 45.0 + (best_score - second_score) * 260.0 + (best_score - 0.65) * 55.0))
+        return key, scale, confidence
+    except Exception:
+        return "Auto", "Major", 0.0
 
 
 def _vocal_rider(audio: np.ndarray, sample_rate: int, strength: float) -> np.ndarray:
@@ -1515,6 +1783,32 @@ def _vocal_doubler(audio: np.ndarray, sample_rate: int, amount: float) -> np.nda
     return np.clip(doubled, -1.2, 1.2).astype(np.float32, copy=False)
 
 
+def _apply_vocal_fx(audio: np.ndarray, sample_rate: int, style: str, amount: float) -> np.ndarray:
+    amount_ratio = max(0.0, min(1.0, amount / 100.0))
+    if amount_ratio <= 0:
+        return audio
+    if style == "Natural Plate":
+        wet = _simple_reverb(audio, sample_rate, amount=0.18 * amount_ratio, room_size=0.52)
+        mixed = audio + wet
+    elif style == "Small Hall":
+        wet = _simple_reverb(audio, sample_rate, amount=0.25 * amount_ratio, room_size=0.82)
+        mixed = audio + wet
+    elif style == "Slap Delay":
+        wet = _delay_effect(audio, sample_rate, delay_seconds=0.105, feedback=0.10, amount=0.20 * amount_ratio)
+        mixed = audio + wet
+    elif style == "Quarter Delay":
+        wet = _delay_effect(audio, sample_rate, delay_seconds=0.32, feedback=0.26, amount=0.16 * amount_ratio)
+        mixed = audio + wet
+    elif style == "Worship Wide":
+        reverb = _simple_reverb(audio, sample_rate, amount=0.24 * amount_ratio, room_size=0.95)
+        delay = _delay_effect(audio, sample_rate, delay_seconds=0.28, feedback=0.28, amount=0.14 * amount_ratio)
+        spread = _apply_width(delay + reverb, 0.26)
+        mixed = audio + spread
+    else:
+        mixed = audio
+    return np.clip(mixed, -1.2, 1.2).astype(np.float32, copy=False)
+
+
 def _final_vocal_level(audio: np.ndarray, target_peak_db: float) -> np.ndarray:
     peak = float(np.max(np.abs(audio))) if audio.size else 0.0
     if peak <= 1e-8:
@@ -1535,6 +1829,26 @@ def _apply_master_tone(audio: np.ndarray, sample_rate: int, controls: dict) -> n
     if abs(brightness) > 0.02:
         toned = _eq_band(toned, sample_rate, 7000, min(14000, sample_rate / 2 - 200), brightness * 0.9)
     return toned
+
+
+def _process_vocal_mix_bus(audio: np.ndarray, sample_rate: int, controls: dict, warnings: list[str]) -> np.ndarray:
+    if audio.size == 0:
+        return audio
+    vocal_bus = audio.astype(np.float32, copy=True)
+    glue = _control_ratio(controls, "vocalGlueAmount")
+    if glue > 0.01:
+        vocal_bus = _compress_audio(vocal_bus, threshold_db=-21.5 + (0.5 - glue) * 4.0, ratio=1.6 + glue * 2.4, mix=0.16 + glue * 0.44)
+    delay_amount = _control_ratio(controls, "vocalDelayAmount")
+    if delay_amount > 0.01:
+        vocal_bus = vocal_bus + _delay_effect(vocal_bus, sample_rate, delay_seconds=0.285, feedback=0.20 + delay_amount * 0.14, amount=0.045 + delay_amount * 0.085)
+    level = float(controls.get("vocalBusLevel", 0))
+    if abs(level) > 0.01:
+        vocal_bus = _apply_gain(vocal_bus, level)
+    if glue > 0.82:
+        warnings.append("High vocal bus glue can reduce vocal dynamics; compare the mix version against the previous one.")
+    if delay_amount > 0.75:
+        warnings.append("High vocal delay can blur lyrics; reduce Vocal Delay if the lead feels less direct.")
+    return np.clip(vocal_bus, -1.2, 1.2).astype(np.float32, copy=False)
 
 
 def _stem_reverb_amount(stem_type: str, reverb_send: float, controls: dict) -> float:
@@ -1563,9 +1877,10 @@ def _stem_delay_amount(stem_type: str, delay_send: float, controls: dict) -> flo
         return 0.0
     global_amount = _control_ratio(controls, "reverbAmount")
     vocal_amount = _control_ratio(controls, "vocalReverbAmount")
+    vocal_delay = _control_ratio(controls, "vocalDelayAmount")
     type_factor = {
-        "Lead Vocal": 0.07 + vocal_amount * 0.07,
-        "Backing Vocal": 0.05 + vocal_amount * 0.05,
+        "Lead Vocal": 0.05 + vocal_amount * 0.05 + vocal_delay * 0.08,
+        "Backing Vocal": 0.04 + vocal_amount * 0.04 + vocal_delay * 0.07,
         "Electric Guitar": 0.035,
         "Acoustic Guitar": 0.03,
         "Keys/Piano": 0.025,

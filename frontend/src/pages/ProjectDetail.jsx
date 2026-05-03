@@ -1,7 +1,7 @@
-import { ArrowLeft, BarChart3, Pencil, UploadCloud } from "lucide-react";
+import { ArrowLeft, BarChart3, Pencil, Trash2, UploadCloud } from "lucide-react";
 import { useEffect, useState } from "react";
-import { Link, useParams } from "react-router-dom";
-import { deleteStem, getProject, updateProject, updateStemType } from "../api.js";
+import { Link, useNavigate, useParams } from "react-router-dom";
+import { deleteProject, deleteStem, getProject, updateProject, updateStemType } from "../api.js";
 import Button from "../components/Button.jsx";
 import CreateProjectModal from "../components/CreateProjectModal.jsx";
 import EmptyState from "../components/EmptyState.jsx";
@@ -20,6 +20,7 @@ export default function ProjectDetail() {
   const [busyStemId, setBusyStemId] = useState("");
   const [actionMessage, setActionMessage] = useState("");
   const [editOpen, setEditOpen] = useState(false);
+  const navigate = useNavigate();
 
   const loadProject = async () => {
     setLoading(true);
@@ -78,6 +79,20 @@ export default function ProjectDetail() {
     setEditOpen(false);
   };
 
+  const handleDeleteProject = async () => {
+    const title = project.songTitle || project.name;
+    if (!window.confirm(`Delete "${title}" and all local project files? This cannot be undone.`)) return;
+    setActionMessage("Deleting project metadata and its full local storage folder.");
+    setError("");
+    try {
+      await deleteProject(projectId);
+      navigate("/");
+    } catch (err) {
+      setError(err.message);
+      setActionMessage("");
+    }
+  };
+
   if (loading) {
     return <ProcessingPanel title="Loading Project" message="Reading project details and uploaded stem metadata." />;
   }
@@ -116,6 +131,10 @@ export default function ProjectDetail() {
               <Button type="button" variant="secondary" onClick={() => setEditOpen(true)} className="min-h-9 px-3 py-1.5 text-xs">
                 <Pencil size={15} />
                 Edit details
+              </Button>
+              <Button type="button" variant="danger" onClick={handleDeleteProject} className="min-h-9 px-3 py-1.5 text-xs">
+                <Trash2 size={15} />
+                Delete project
               </Button>
             </div>
           </div>

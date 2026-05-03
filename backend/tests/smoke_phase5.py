@@ -38,6 +38,8 @@ def main() -> None:
         fixture_dir.mkdir()
         files = [
             ("lead_vocal.wav", "Lead Vocal", 220, 0.2),
+            ("bgv_left.wav", "Backing Vocal", 330, 0.11),
+            ("bgv_right.wav", "Backing Vocal", 350, 0.11),
             ("kick.wav", "Kick", 70, 0.26),
             ("bass.wav", "Bass", 110, 0.22),
             ("egtr_l.wav", "Electric Guitar", 440, 0.16),
@@ -79,9 +81,13 @@ def main() -> None:
         assert presets.status_code == 200, presets.text
         assert any(item["name"] == "Rock Band" for item in presets.json()["presets"])
 
-        controls = client.patch(f"/api/projects/{project_id}/mix-controls", json={"preset": "Rock Band"})
+        controls = client.patch(
+            f"/api/projects/{project_id}/mix-controls",
+            json={"preset": "Rock Band", "vocalBusLevel": 0.5, "vocalGlueAmount": 70, "vocalDelayAmount": 35, "backingVocalWidth": 72},
+        )
         assert controls.status_code == 200, controls.text
         assert controls.json()["mixSettings"]["controls"]["preset"] == "Rock Band"
+        assert controls.json()["mixSettings"]["controls"]["vocalGlueAmount"] == 70
 
         reset = client.post(f"/api/projects/{project_id}/reset-advanced-mix")
         assert reset.status_code == 200, reset.text
@@ -101,6 +107,7 @@ def main() -> None:
         assert resolve_stored_file_path(first_version["wavPath"]).exists(), first_version
         assert resolve_stored_file_path(first_version["metadataPath"]).exists(), first_version
         assert first_version["sourceFiles"], first_version
+        assert any(source["stemType"] == "Backing Vocal" for source in first_version["sourceFiles"]), first_version
         assert first_version["integratedLufs"] is not None, first_version
 
         renamed = client.patch(f"/api/projects/{project_id}/mix-versions/{first_version['id']}", json={"label": "Rock Balance A"})

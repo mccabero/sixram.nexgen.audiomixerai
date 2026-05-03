@@ -79,7 +79,7 @@ export default function WorkflowGuide({ project, currentStep = "", className = "
         </div>
         <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap xl:justify-end">
           {state.skipCleaningAvailable ? (
-            <Button as={Link} to={`/projects/${project.id}/mixer`} variant="secondary" className="sm:w-auto">
+            <Button as={Link} to={state.skipCleaningHref(project.id)} variant="secondary" className="sm:w-auto">
               <SlidersHorizontal size={17} />
               Skip cleaning
             </Button>
@@ -203,6 +203,7 @@ function getWorkflowState(project) {
     nextStep,
     summary: workflowSummary({ uploadedCount, analyzedCount, detectedCount, cleanedCount, vocalCount, enhancedCount, mixCount: mixVersions.length, masterCount: masterVersions.length }),
     skipCleaningAvailable: analysisComplete && !hasCleanedStems && !hasMix,
+    skipCleaningHref: (projectId) => (vocalCount > 0 && !hasEnhancedVocals ? `/projects/${projectId}/vocals` : `/projects/${projectId}/mixer`),
   };
 }
 

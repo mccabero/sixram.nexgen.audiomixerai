@@ -22,6 +22,10 @@ MIX_PRESETS: dict[str, dict[str, Any]] = {
         "controls": {
             "preset": "Balanced",
             "vocalBoost": 1.5,
+            "vocalBusLevel": 0,
+            "vocalGlueAmount": 45,
+            "vocalDelayAmount": 25,
+            "backingVocalWidth": 60,
             "drumPunch": 50,
             "bassWeight": 50,
             "brightness": 0,
@@ -39,6 +43,10 @@ MIX_PRESETS: dict[str, dict[str, Any]] = {
         "controls": {
             "preset": "Vocal Forward",
             "vocalBoost": 2.8,
+            "vocalBusLevel": 0.6,
+            "vocalGlueAmount": 58,
+            "vocalDelayAmount": 28,
+            "backingVocalWidth": 62,
             "drumPunch": 45,
             "bassWeight": 45,
             "brightness": 8,
@@ -64,6 +72,10 @@ MIX_PRESETS: dict[str, dict[str, Any]] = {
         "controls": {
             "preset": "Rock Band",
             "vocalBoost": 1.2,
+            "vocalBusLevel": 0,
+            "vocalGlueAmount": 52,
+            "vocalDelayAmount": 18,
+            "backingVocalWidth": 54,
             "drumPunch": 72,
             "bassWeight": 62,
             "brightness": 7,
@@ -81,6 +93,10 @@ MIX_PRESETS: dict[str, dict[str, Any]] = {
         "controls": {
             "preset": "Worship Band",
             "vocalBoost": 1.9,
+            "vocalBusLevel": 0.3,
+            "vocalGlueAmount": 48,
+            "vocalDelayAmount": 42,
+            "backingVocalWidth": 74,
             "drumPunch": 50,
             "bassWeight": 52,
             "brightness": 4,
@@ -98,6 +114,10 @@ MIX_PRESETS: dict[str, dict[str, Any]] = {
         "controls": {
             "preset": "Acoustic",
             "vocalBoost": 2.0,
+            "vocalBusLevel": 0.2,
+            "vocalGlueAmount": 38,
+            "vocalDelayAmount": 18,
+            "backingVocalWidth": 48,
             "drumPunch": 32,
             "bassWeight": 42,
             "brightness": 5,
@@ -115,6 +135,10 @@ MIX_PRESETS: dict[str, dict[str, Any]] = {
         "controls": {
             "preset": "Pop",
             "vocalBoost": 2.2,
+            "vocalBusLevel": 0.4,
+            "vocalGlueAmount": 62,
+            "vocalDelayAmount": 24,
+            "backingVocalWidth": 68,
             "drumPunch": 62,
             "bassWeight": 64,
             "brightness": 12,
@@ -132,6 +156,10 @@ MIX_PRESETS: dict[str, dict[str, Any]] = {
         "controls": {
             "preset": "Live Rehearsal",
             "vocalBoost": 1.0,
+            "vocalBusLevel": -0.2,
+            "vocalGlueAmount": 34,
+            "vocalDelayAmount": 12,
+            "backingVocalWidth": 42,
             "drumPunch": 42,
             "bassWeight": 48,
             "brightness": -4,
@@ -221,10 +249,18 @@ def run_advanced_mix_job(project_id: str, job_id: str, instrumental: bool = Fals
 def _run_advanced_mix_job(project_id: str, job_id: str, instrumental: bool) -> None:
     job_type = "Instrumental Mix" if instrumental else "Advanced Mix"
     try:
-        _update_job(project_id, job_id, status="Processing", progress=8, message="Preparing source stems.")
-        _update_job(project_id, job_id, progress=22, message="Applying stem processing chains.")
-        version = generate_advanced_mix_preview(project_id, instrumental=instrumental)
-        _update_job(project_id, job_id, progress=86, message=f"Saved {version.label}.")
+        _update_job(project_id, job_id, status="Processing", progress=4, message="Preparing source stems.")
+        version = generate_advanced_mix_preview(
+            project_id,
+            instrumental=instrumental,
+            progress_callback=lambda fraction, message: _update_job(
+                project_id,
+                job_id,
+                progress=_scaled_progress(fraction, 6, 92),
+                message=message,
+            ),
+        )
+        _update_job(project_id, job_id, progress=96, message=f"Saving {version.label}.")
         now = utc_now_iso()
         data = store.load()
         project = _find_project(data, project_id)
@@ -318,7 +354,7 @@ def reset_advanced_mix(project_id: str) -> Project:
     return Project(**project)
 
 
-def generate_advanced_mix_preview(project_id: str, instrumental: bool = False) -> MixVersion:
+def generate_advanced_mix_preview(project_id: str, instrumental: bool = False, progress_callback=None) -> MixVersion:
     try:
         ensure_audio_environment()
     except RuntimeError as exc:
@@ -340,7 +376,7 @@ def generate_advanced_mix_preview(project_id: str, instrumental: bool = False) -
 
     render_label = "instrumental mix" if instrumental else "advanced mix"
     append_project_log(project_subdirs(project_id)["logs"], f"Generating {render_label} v{version_number:03d} with {preset_name} preset.")
-    result = generate_advanced_mix(stem_inputs, output_dir, version_number, controls)
+    result = generate_advanced_mix(stem_inputs, output_dir, version_number, controls, progress_callback=progress_callback)
     if result.mp3_error:
         result.warnings.append(f"MP3 encode failed; WAV mix is available. {result.mp3_error}")
     for warning in result.warnings:
@@ -447,11 +483,14 @@ def delete_mix_version(project_id: str, version_id: str) -> dict[str, str]:
 
 def _advanced_mix_inputs(project: dict[str, Any], preset: dict[str, Any], instrumental: bool = False) -> list[dict[str, Any]]:
     settings = {item["stemId"]: item for item in project.get("mixSettings", {}).get("stems", [])}
+    controls = project.get("mixSettings", {}).get("controls", {})
     stems = project.get("stems", [])
     candidate_stems = [stem for stem in stems if not (instrumental and effective_stem_type(stem) in VOCAL_TYPES)]
     solo_active = any(settings.get(stem["id"], {}).get("solo") for stem in candidate_stems)
     active_stems = [stem for stem in candidate_stems if _is_audible(stem, settings.get(stem["id"]), solo_active)]
     lead_vocal_active = any(effective_stem_type(stem) == "Lead Vocal" for stem in active_stems)
+    backing_vocals = [stem for stem in active_stems if effective_stem_type(stem) == "Backing Vocal"]
+    backing_vocal_index = 0
     low_end_adjustments = _low_end_adjustments(active_stems)
     inputs = []
 
@@ -469,6 +508,10 @@ def _advanced_mix_inputs(project: dict[str, Any], preset: dict[str, Any], instru
         role_gain = float(preset.get("roleGains", {}).get(stem_type, 0))
         role_gain += _vocal_priority_adjustment(stem_type, lead_vocal_active)
         role_gain += low_end_adjustments.get(stem["id"], 0)
+        if stem_type == "Backing Vocal":
+            backing_vocal_index += 1
+            if len(backing_vocals) > 1:
+                role_gain -= min(1.8, 0.32 * (len(backing_vocals) - 1))
 
         defaults = _default_stem_processing(stem_type)
         setting.setdefault("processingChainEnabled", True)
@@ -476,6 +519,10 @@ def _advanced_mix_inputs(project: dict[str, Any], preset: dict[str, Any], instru
         setting.setdefault("delaySend", defaults["delaySend"])
         setting.setdefault("presenceAmount", defaults["presenceAmount"])
         setting.setdefault("compressionAmount", defaults["compressionAmount"])
+        pan = float(setting.get("pan", 0))
+        if stem_type == "Backing Vocal" and len(backing_vocals) > 1 and abs(pan) < 1:
+            pan = _backing_stack_pan(backing_vocal_index, len(backing_vocals), controls)
+
         inputs.append(
             {
                 "stemId": stem["id"],
@@ -486,7 +533,7 @@ def _advanced_mix_inputs(project: dict[str, Any], preset: dict[str, Any], instru
                 "stemType": stem_type,
                 "gainDb": float(setting.get("gainDb", 0)),
                 "presetGainDb": role_gain,
-                "pan": float(setting.get("pan", 0)),
+                "pan": pan,
                 "processingChainEnabled": bool(setting.get("processingChainEnabled", True)),
                 "reverbSend": float(setting.get("reverbSend", defaults["reverbSend"])),
                 "delaySend": float(setting.get("delaySend", defaults["delaySend"])),
@@ -522,6 +569,11 @@ def _update_job(project_id: str, job_id: str, **updates: Any) -> None:
     job.update(updates)
     job["updatedAt"] = utc_now_iso()
     store.save(data)
+
+
+def _scaled_progress(fraction: float, start: int, end: int) -> int:
+    safe_fraction = max(0.0, min(1.0, float(fraction)))
+    return max(start, min(end, int(round(start + safe_fraction * (end - start)))))
 
 
 def _find_mix_version(project: dict[str, Any], version_id: str) -> dict[str, Any]:
@@ -618,6 +670,17 @@ def _phase5_default_pan(stem_type: str, type_index: int) -> float:
         amount = {"Acoustic Guitar": 26, "Keys/Piano": 32}[stem_type]
         return -amount if type_index % 2 else amount
     return 0.0
+
+
+def _backing_stack_pan(index: int, total: int, controls: dict[str, Any]) -> float:
+    if total <= 1:
+        return 0.0
+    spread = max(18.0, min(72.0, float(controls.get("backingVocalWidth", 60)) * 0.72))
+    if total == 2:
+        return -spread if index == 1 else spread
+    center = (total + 1) / 2.0
+    offset = (index - center) / max(1.0, center - 1.0)
+    return round(offset * spread, 2)
 
 
 def _vocal_priority_adjustment(stem_type: str, lead_vocal_active: bool) -> float:

@@ -3,7 +3,9 @@ import { useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import {
   applyAutoBalance,
+  deleteAllMixVersions,
   deleteMixVersion,
+  deleteRoughMix,
   generateAutoBalance,
   generateRoughMix,
   getProcessingJob,
@@ -29,6 +31,10 @@ import { formatDateTime, formatDb, formatLufs, formatPan } from "../utils/format
 const defaultControls = {
   preset: "Balanced",
   vocalBoost: 1.5,
+  vocalBusLevel: 0,
+  vocalGlueAmount: 45,
+  vocalDelayAmount: 25,
+  backingVocalWidth: 60,
   drumPunch: 50,
   bassWeight: 50,
   brightness: 0,
@@ -79,10 +85,10 @@ export default function MixerPage() {
 
   const roughPreview = {
     id: "rough",
-    label: "Rough mix",
+    label: "Preview - Rough Mix",
     url: roughMix?.mp3Url || roughMix?.wavUrl || mixSettings.roughMixMp3Url || mixSettings.roughMixWavUrl,
     path: roughMix?.mp3Path || roughMix?.wavPath || mixSettings.roughMixMp3Path || mixSettings.roughMixWavPath,
-    kind: "Rough",
+    kind: "Preview",
   };
 
   const comparisonOptions = useMemo(() => {
@@ -224,6 +230,23 @@ export default function MixerPage() {
     }
   };
 
+  const removeRoughMix = async () => {
+    if (!window.confirm("Delete the rough mix preview? Mix versions and original stems are kept.")) return;
+    setActionLoading("deleteRough");
+    setError("");
+    try {
+      const nextProject = await deleteRoughMix(projectId);
+      setProject(nextProject);
+      setRoughMix(null);
+      if (compareA === "rough") setCompareA(nextProject.mixSettings?.latestMixVersionId || "");
+      if (compareB === "rough") setCompareB(nextProject.mixSettings?.latestMixVersionId || "");
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setActionLoading("");
+    }
+  };
+
   const runAdvancedMix = async () => {
     setActionLoading("advanced");
     setError("");
@@ -248,6 +271,23 @@ export default function MixerPage() {
       if (!compareB && roughPreview.url) setCompareB("rough");
     } catch (err) {
       setError(err.message);
+      setActionLoading("");
+    }
+  };
+
+  const removeAllMixVersions = async () => {
+    if (!window.confirm("Delete all mix versions, the rough preview, and downstream masters/exports? Original, cleaned, and enhanced stem files are kept.")) return;
+    setActionLoading("deleteAllVersions");
+    setError("");
+    try {
+      setProject(await deleteAllMixVersions(projectId));
+      setAdvancedMix(null);
+      setRoughMix(null);
+      setCompareA("");
+      setCompareB("");
+    } catch (err) {
+      setError(err.message);
+    } finally {
       setActionLoading("");
     }
   };
@@ -487,6 +527,10 @@ export default function MixerPage() {
           </div>
           <div className="mt-4 grid gap-4 sm:grid-cols-2">
             <ControlSlider label="Vocal Boost" value={controls.vocalBoost} min={-6} max={6} step={0.5} display={formatDb(controls.vocalBoost)} onChange={(value) => updateControlLocal({ vocalBoost: value })} onCommit={(value) => commitControls({ vocalBoost: value })} />
+            <ControlSlider label="Vocal Bus Level" value={controls.vocalBusLevel} min={-6} max={6} step={0.5} display={formatDb(controls.vocalBusLevel)} onChange={(value) => updateControlLocal({ vocalBusLevel: value })} onCommit={(value) => commitControls({ vocalBusLevel: value })} />
+            <ControlSlider label="Vocal Glue" value={controls.vocalGlueAmount} onChange={(value) => updateControlLocal({ vocalGlueAmount: value })} onCommit={(value) => commitControls({ vocalGlueAmount: value })} />
+            <ControlSlider label="Vocal Delay" value={controls.vocalDelayAmount} onChange={(value) => updateControlLocal({ vocalDelayAmount: value })} onCommit={(value) => commitControls({ vocalDelayAmount: value })} />
+            <ControlSlider label="Backing Width" value={controls.backingVocalWidth} onChange={(value) => updateControlLocal({ backingVocalWidth: value })} onCommit={(value) => commitControls({ backingVocalWidth: value })} />
             <ControlSlider label="Drum Punch" value={controls.drumPunch} onChange={(value) => updateControlLocal({ drumPunch: value })} onCommit={(value) => commitControls({ drumPunch: value })} />
             <ControlSlider label="Bass Weight" value={controls.bassWeight} onChange={(value) => updateControlLocal({ bassWeight: value })} onCommit={(value) => commitControls({ bassWeight: value })} />
             <ControlSlider label="Brightness" value={controls.brightness} min={-50} max={50} display={signedPercent(controls.brightness)} onChange={(value) => updateControlLocal({ brightness: value })} onCommit={(value) => commitControls({ brightness: value })} />
@@ -518,6 +562,7 @@ export default function MixerPage() {
 
         <MixPreviewPanel
           latestVersion={latestVersion}
+          roughPreview={roughPreview}
           mixVersions={mixVersions}
           comparisonOptions={comparisonOptions}
           compareA={compareA}
@@ -532,6 +577,8 @@ export default function MixerPage() {
           setVersionDraft={setVersionDraft}
           onSaveVersionLabel={saveVersionLabel}
           onDeleteVersion={removeMixVersion}
+          onDeleteRoughMix={removeRoughMix}
+          onDeleteAllMixVersions={removeAllMixVersions}
         />
       </section>
 
@@ -579,6 +626,7 @@ export default function MixerPage() {
 
 function MixPreviewPanel({
   latestVersion,
+  roughPreview,
   mixVersions,
   comparisonOptions,
   compareA,
@@ -593,6 +641,8 @@ function MixPreviewPanel({
   setVersionDraft,
   onSaveVersionLabel,
   onDeleteVersion,
+  onDeleteRoughMix,
+  onDeleteAllMixVersions,
 }) {
   return (
     <div className="rounded-lg border border-white/10 bg-white/[0.04] p-4">
@@ -601,7 +651,21 @@ function MixPreviewPanel({
           <h2 className="font-semibold text-white">Mix Versions</h2>
           <p className="mt-1 text-sm text-zinc-400">{latestVersion ? `${latestVersion.label} - ${latestVersion.preset} - ${formatDateTime(latestVersion.createdAt)}` : "No advanced mix rendered yet."}</p>
         </div>
-        {latestVersion ? <StatusBadge status="Completed" /> : <StatusBadge status="Pending" />}
+        <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:justify-end">
+          {roughPreview?.url ? (
+            <Button type="button" variant="danger" onClick={onDeleteRoughMix} className="sm:w-auto">
+              <Trash2 size={17} />
+              Delete Preview
+            </Button>
+          ) : null}
+          {mixVersions.length ? (
+            <Button type="button" variant="danger" onClick={onDeleteAllMixVersions} className="sm:w-auto">
+              <Trash2 size={17} />
+              Delete All Mixes
+            </Button>
+          ) : null}
+          {latestVersion ? <StatusBadge status="Completed" /> : <StatusBadge status="Pending" />}
+        </div>
       </div>
 
       {latestVersion ? (
@@ -627,6 +691,29 @@ function MixPreviewPanel({
       ) : (
         <p className="mt-4 rounded-lg border border-white/10 bg-black/20 px-3 py-3 text-sm text-zinc-500">Render a rough mix or advanced mix to compare versions.</p>
       )}
+
+      {roughPreview?.url ? (
+        <div className="mt-4 space-y-2">
+          <p className="text-xs font-semibold uppercase tracking-[0.12em] text-zinc-500">Preview Render</p>
+          <div className="grid gap-3 rounded-lg border border-amber-300/25 bg-amber-300/[0.075] p-3 shadow-[0_0_28px_rgba(251,191,36,0.08)] lg:grid-cols-[minmax(220px,0.95fr)_minmax(150px,0.45fr)_minmax(320px,1fr)] lg:items-center">
+            <div className="min-w-0">
+              <div className="flex flex-wrap items-center gap-2">
+                <p className="truncate text-sm font-semibold text-white">Rough Mix Preview</p>
+                <span className="inline-flex rounded-full border border-amber-200/30 bg-amber-300/15 px-2.5 py-1 text-[11px] font-bold uppercase tracking-[0.12em] text-amber-100">
+                  Preview
+                </span>
+              </div>
+              <p className="mt-1 text-xs text-amber-100/75">Quick gain-and-pan reference before advanced processing.</p>
+              <p className="mt-1 truncate text-xs text-zinc-500">{roughPreview.path}</p>
+            </div>
+            <div className="grid grid-cols-2 gap-2 text-xs text-zinc-400 lg:grid-cols-1 lg:gap-1">
+              <span>Rough mix</span>
+              <span>Not mastered</span>
+            </div>
+            <audio className="h-9 w-full min-w-0" src={roughPreview.url} controls preload="none" />
+          </div>
+        </div>
+      ) : null}
 
       {mixVersions.length ? (
         <div className="mt-4 space-y-2">
@@ -700,7 +787,14 @@ function CompareSlot({ label, options, selected, onChange, item, variant }) {
       </label>
       {item?.url ? (
         <div className="mt-3 space-y-2">
-          <p className="truncate text-xs text-zinc-500">{item.path}</p>
+          <div className="flex flex-wrap items-center gap-2">
+            {item.kind === "Preview" ? (
+              <span className="inline-flex rounded-full border border-amber-200/30 bg-amber-300/15 px-2.5 py-1 text-[11px] font-bold uppercase tracking-[0.12em] text-amber-100">
+                Preview
+              </span>
+            ) : null}
+            <p className="min-w-0 flex-1 truncate text-xs text-zinc-500">{item.path}</p>
+          </div>
           <WaveformPreview src={item.url} variant={variant} />
           <audio className="w-full" src={item.url} controls />
         </div>
@@ -882,6 +976,8 @@ function actionPanelFor(actionLoading, savingStemId, mixJob) {
   if (actionLoading === "instrumental") return { title: "Starting Instrumental Mix", message: "Creating a vocal-muted mix render job." };
   if (actionLoading === "version") return { title: "Saving Mix Version", message: "Updating the mix version label." };
   if (actionLoading === "deleteVersion") return { title: "Deleting Mix Version", message: "Removing generated mix files and metadata." };
+  if (actionLoading === "deleteRough") return { title: "Deleting Rough Preview", message: "Removing the generated rough mix preview." };
+  if (actionLoading === "deleteAllVersions") return { title: "Deleting Mix Versions", message: "Removing mix versions, rough preview, masters, and exports." };
   if (actionLoading === "controls" || actionLoading === "preset") return { title: "Saving Mix Controls", message: "Updating advanced mix controls." };
   if (savingStemId) return { title: "Saving Stem Setting", message: "Updating the selected stem setting." };
   return null;

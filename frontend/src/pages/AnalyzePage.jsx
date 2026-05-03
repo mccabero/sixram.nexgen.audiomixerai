@@ -1,7 +1,7 @@
-import { Activity, ArrowLeft, BarChart3, Gauge, RefreshCw, Search, SlidersHorizontal, TriangleAlert, WandSparkles, Zap } from "lucide-react";
+import { Activity, ArrowLeft, BarChart3, Gauge, RefreshCw, Search, SlidersHorizontal, Trash2, TriangleAlert, WandSparkles, Zap } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { acceptAllStemDetections, acceptStemDetection, clearDetectionMemory, detectStemTypes, generateAutoBalance, getProcessingJob, getProject, startAnalysis, updateStemType } from "../api.js";
+import { acceptAllStemDetections, acceptStemDetection, clearDetectionMemory, deleteAnalysisResults, deleteAutoBalance, deleteStemDetections, detectStemTypes, generateAutoBalance, getProcessingJob, getProject, startAnalysis, updateStemType } from "../api.js";
 import Button from "../components/Button.jsx";
 import EmptyState from "../components/EmptyState.jsx";
 import ProcessingPanel from "../components/ProcessingPanel.jsx";
@@ -26,6 +26,9 @@ export default function AnalyzePage() {
 
   const stems = project?.stems || [];
   const analysisComplete = stems.length > 0 && stems.every((stem) => stem.analysisStatus === "Completed");
+  const hasAnalysisResults = stems.some((stem) => stem.analysisResult || stem.analysisStatus === "Completed" || stem.analysisStatus === "Failed");
+  const hasDetections = stems.some((stem) => stem.detectionResult);
+  const hasAutoBalance = stems.some((stem) => stem.autoBalanceSuggestion) || Boolean(project?.mixSettings?.autoBalanceGeneratedAt || project?.mixSettings?.autoBalanceAppliedAt);
   const running = job && runningStatuses.has(job.status);
 
   const latestAnalysisJob = useMemo(() => {
@@ -93,11 +96,39 @@ export default function AnalyzePage() {
     }
   };
 
+  const deleteAnalysis = async () => {
+    if (!window.confirm("Delete analysis results and downstream mix/master renders? Original stems are kept.")) return;
+    setActionLoading("deleteAnalysis");
+    setError("");
+    setBalanceNotice("");
+    try {
+      setProject(await deleteAnalysisResults(projectId));
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setActionLoading("");
+    }
+  };
+
   const runDetection = async () => {
     setActionLoading("detect");
     setError("");
     try {
       setProject(await detectStemTypes(projectId));
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setActionLoading("");
+    }
+  };
+
+  const deleteDetections = async () => {
+    if (!window.confirm("Delete stem detection suggestions and downstream generated files? Manual stem types and originals are kept.")) return;
+    setActionLoading("deleteDetections");
+    setError("");
+    setBalanceNotice("");
+    try {
+      setProject(await deleteStemDetections(projectId));
     } catch (err) {
       setError(err.message);
     } finally {
@@ -179,6 +210,20 @@ export default function AnalyzePage() {
     }
   };
 
+  const removeAutoBalance = async () => {
+    if (!window.confirm("Delete auto-balance suggestions and generated mix/master outputs? Analysis results and originals are kept.")) return;
+    setActionLoading("deleteBalance");
+    setError("");
+    setBalanceNotice("");
+    try {
+      setProject(await deleteAutoBalance(projectId));
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setActionLoading("");
+    }
+  };
+
   if (loading) {
     return <ProcessingPanel title="Loading Analyze" message="Reading stem analysis, detection, and job metadata." />;
   }
@@ -199,7 +244,13 @@ export default function AnalyzePage() {
                 ? { title: "Clearing Detection Memory", message: "Removing learned filename correction patterns." }
                 : actionLoading === "balance"
                   ? { title: "Generating Auto Balance", message: "Calculating suggested gain, pan, and role priority from analysis data." }
-                  : null;
+                  : actionLoading === "deleteAnalysis"
+                    ? { title: "Deleting Analysis Results", message: "Removing generated analysis data and downstream renders." }
+                    : actionLoading === "deleteDetections"
+                      ? { title: "Deleting Stem Detections", message: "Removing generated detection suggestions and stale downstream renders." }
+                      : actionLoading === "deleteBalance"
+                        ? { title: "Deleting Auto Balance", message: "Removing suggested gain/pan and stale mix/master renders." }
+                        : null;
 
   return (
     <div>
@@ -225,9 +276,17 @@ export default function AnalyzePage() {
             <BarChart3 size={17} />
             {analysisComplete ? "Re-analyze" : "Analyze Stems"}
           </Button>
+          <Button type="button" variant="danger" onClick={deleteAnalysis} disabled={!hasAnalysisResults || running || actionLoading === "deleteAnalysis"}>
+            <Trash2 size={17} />
+            Delete Analysis
+          </Button>
           <Button type="button" variant="secondary" onClick={runAutoBalance} disabled={!analysisComplete || running || actionLoading === "balance"}>
             <WandSparkles size={17} />
             Generate Auto Balance
+          </Button>
+          <Button type="button" variant="danger" onClick={removeAutoBalance} disabled={!hasAutoBalance || running || actionLoading === "deleteBalance"}>
+            <Trash2 size={17} />
+            Delete Balance
           </Button>
           <Button as={Link} to={`/projects/${projectId}/mixer`} variant="secondary">
             <SlidersHorizontal size={17} />
@@ -277,6 +336,10 @@ export default function AnalyzePage() {
             <Button type="button" variant="secondary" onClick={runDetection} disabled={!stems.length || running || actionLoading === "detect"}>
               <Search size={17} />
               {actionLoading === "detect" ? "Detecting..." : "Detect Stem Types"}
+            </Button>
+            <Button type="button" variant="danger" onClick={deleteDetections} disabled={!hasDetections || running || actionLoading === "deleteDetections"}>
+              <Trash2 size={17} />
+              Delete Detections
             </Button>
             <Button type="button" variant="secondary" onClick={acceptAllDetections} disabled={!project?.detectionSummary?.confidentPendingCount || actionLoading === "acceptAll"}>
               Accept all ({project?.detectionSummary?.confidentPendingCount || 0})

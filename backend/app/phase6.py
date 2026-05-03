@@ -135,11 +135,18 @@ def run_mastering_job(project_id: str, job_id: str, payload: GenerateMasterReque
 
 def _run_mastering_job(project_id: str, job_id: str, payload: GenerateMasterRequest) -> None:
     try:
-        _update_job(project_id, job_id, status="Processing", progress=8, message="Preparing selected mix.")
-        _update_job(project_id, job_id, progress=24, message="Analyzing mix loudness.")
-        _update_job(project_id, job_id, progress=48, message="Applying mastering chain.")
-        master = generate_master(project_id, payload)
-        _update_job(project_id, job_id, progress=88, message=f"Saved {master.label}.")
+        _update_job(project_id, job_id, status="Processing", progress=4, message="Preparing selected mix.")
+        master = generate_master(
+            project_id,
+            payload,
+            progress_callback=lambda fraction, message: _update_job(
+                project_id,
+                job_id,
+                progress=_scaled_progress(fraction, 6, 92),
+                message=message,
+            ),
+        )
+        _update_job(project_id, job_id, progress=96, message=f"Saving {master.label}.")
         now = utc_now_iso()
         data = store.load()
         project = _find_project(data, project_id)
@@ -169,7 +176,7 @@ def _run_mastering_job(project_id: str, job_id: str, payload: GenerateMasterRequ
         append_project_log(project_subdirs(project_id)["logs"], f"Mastering job {job_id} failed: {error_message}")
 
 
-def generate_master(project_id: str, payload: GenerateMasterRequest) -> MasterVersion:
+def generate_master(project_id: str, payload: GenerateMasterRequest, progress_callback=None) -> MasterVersion:
     try:
         ensure_audio_environment()
     except RuntimeError as exc:
@@ -205,6 +212,7 @@ def generate_master(project_id: str, payload: GenerateMasterRequest) -> MasterVe
         controls=controls,
         target_lufs=target_lufs,
         true_peak_ceiling_db=TRUE_PEAK_CEILING_DB,
+        progress_callback=progress_callback,
     )
 
     now = utc_now_iso()
@@ -398,6 +406,11 @@ def _update_job(project_id: str, job_id: str, **updates: Any) -> None:
     job.update(updates)
     job["updatedAt"] = utc_now_iso()
     store.save(data)
+
+
+def _scaled_progress(fraction: float, start: int, end: int) -> int:
+    safe_fraction = max(0.0, min(1.0, float(fraction)))
+    return max(start, min(end, int(round(start + safe_fraction * (end - start)))))
 
 
 def _error_detail(exc: Exception) -> str:

@@ -50,6 +50,12 @@ export function updateProject(projectId, project) {
   });
 }
 
+export function deleteProject(projectId) {
+  return request(`/projects/${projectId}`, {
+    method: "DELETE",
+  });
+}
+
 export function updateStemType(projectId, stemId, stemType) {
   return request(`/projects/${projectId}/stems/${stemId}`, {
     method: "PATCH",
@@ -97,6 +103,24 @@ export function startAnalysis(projectId) {
   });
 }
 
+export function deleteAnalysisResults(projectId) {
+  return request(`/projects/${projectId}/analysis-results`, {
+    method: "DELETE",
+  });
+}
+
+export function deleteStemDetections(projectId) {
+  return request(`/projects/${projectId}/stem-detections`, {
+    method: "DELETE",
+  });
+}
+
+export function deleteAutoBalance(projectId) {
+  return request(`/projects/${projectId}/auto-balance`, {
+    method: "DELETE",
+  });
+}
+
 export function getProcessingJob(projectId, jobId) {
   return request(`/projects/${projectId}/jobs/${jobId}`);
 }
@@ -120,8 +144,31 @@ export function startCleaning(projectId) {
   });
 }
 
+export function deleteCleanedStems(projectId) {
+  return request(`/projects/${projectId}/cleaned-stems`, {
+    method: "DELETE",
+  });
+}
+
 export function listVocalEnhancerPresets() {
   return request("/vocal-enhancer-presets");
+}
+
+export function listCustomVocalPresets() {
+  return request("/vocal-custom-presets");
+}
+
+export function createCustomVocalPreset(payload) {
+  return request("/vocal-custom-presets", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function deleteCustomVocalPreset(presetId) {
+  return request(`/vocal-custom-presets/${presetId}`, {
+    method: "DELETE",
+  });
 }
 
 export function updateVocalEnhancementSettings(projectId, stemId, updates) {
@@ -131,9 +178,45 @@ export function updateVocalEnhancementSettings(projectId, stemId, updates) {
   });
 }
 
+export function analyzeVocalRecommendations(projectId) {
+  return request(`/projects/${projectId}/analyze-vocals`, {
+    method: "POST",
+  });
+}
+
+export function applyVocalRecommendation(projectId, stemId) {
+  return request(`/projects/${projectId}/stems/${stemId}/apply-vocal-recommendation`, {
+    method: "POST",
+  });
+}
+
+export function applyAllVocalRecommendations(projectId) {
+  return request(`/projects/${projectId}/apply-vocal-recommendations`, {
+    method: "POST",
+  });
+}
+
+export function runVocalQualityDoctor(projectId) {
+  return request(`/projects/${projectId}/vocal-quality-doctor`, {
+    method: "POST",
+  });
+}
+
+export function applyVocalDoctorFix(projectId, stemId) {
+  return request(`/projects/${projectId}/stems/${stemId}/apply-vocal-doctor-fix`, {
+    method: "POST",
+  });
+}
+
 export function startVocalEnhancement(projectId) {
   return request(`/projects/${projectId}/enhance-vocals`, {
     method: "POST",
+  });
+}
+
+export function deleteVocalEnhancements(projectId) {
+  return request(`/projects/${projectId}/vocal-enhancements`, {
+    method: "DELETE",
   });
 }
 
@@ -183,6 +266,12 @@ export function generateRoughMix(projectId) {
   });
 }
 
+export function deleteRoughMix(projectId) {
+  return request(`/projects/${projectId}/rough-mix`, {
+    method: "DELETE",
+  });
+}
+
 export function generateAdvancedMix(projectId) {
   return request(`/projects/${projectId}/advanced-mix`, {
     method: "POST",
@@ -216,6 +305,12 @@ export function renameMixVersion(projectId, versionId, label) {
 
 export function deleteMixVersion(projectId, versionId) {
   return request(`/projects/${projectId}/mix-versions/${versionId}`, {
+    method: "DELETE",
+  });
+}
+
+export function deleteAllMixVersions(projectId) {
+  return request(`/projects/${projectId}/mix-versions`, {
     method: "DELETE",
   });
 }
@@ -259,6 +354,18 @@ export function createProjectBackup(projectId, payload) {
   return request(`/projects/${projectId}/exports/backup`, {
     method: "POST",
     body: JSON.stringify(payload),
+  });
+}
+
+export function deleteMasters(projectId) {
+  return request(`/projects/${projectId}/masters`, {
+    method: "DELETE",
+  });
+}
+
+export function deleteExports(projectId) {
+  return request(`/projects/${projectId}/exports`, {
+    method: "DELETE",
   });
 }
 

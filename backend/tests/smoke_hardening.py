@@ -69,6 +69,19 @@ def main() -> None:
         assert job["status"] == "Failed", job
         assert job["errors"], job
 
+        project_root = Path(tmp) / "projects" / project_id
+        export_marker = project_root / "exports" / "delete-me.txt"
+        export_marker.parent.mkdir(parents=True, exist_ok=True)
+        export_marker.write_text("generated project file", encoding="utf-8")
+        assert export_marker.exists()
+
+        deleted = client.delete(f"/api/projects/{project_id}")
+        assert deleted.status_code == 200, deleted.text
+        assert not project_root.exists(), project_root
+        assert all(item["id"] != project_id for item in client.get("/api/projects").json())
+        missing = client.get(f"/api/projects/{project_id}")
+        assert missing.status_code == 404, missing.text
+
     print("Hardening smoke test passed")
 
 

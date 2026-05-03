@@ -1,7 +1,7 @@
 import { AudioLines, Clock3, FolderKanban, FolderPlus, HardDrive, Music2, RefreshCw, ShieldCheck, TriangleAlert } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { createProject, getHealth, listProjects } from "../api.js";
+import { createProject, deleteProject, getHealth, listProjects } from "../api.js";
 import Button from "../components/Button.jsx";
 import CreateProjectModal from "../components/CreateProjectModal.jsx";
 import EmptyState from "../components/EmptyState.jsx";
@@ -14,6 +14,7 @@ export default function Dashboard() {
   const [error, setError] = useState("");
   const [health, setHealth] = useState(null);
   const [modalOpen, setModalOpen] = useState(false);
+  const [deletingProjectId, setDeletingProjectId] = useState("");
   const navigate = useNavigate();
 
   const loadProjects = async () => {
@@ -38,6 +39,21 @@ export default function Dashboard() {
     const created = await createProject(project);
     setModalOpen(false);
     navigate(`/projects/${created.id}`);
+  };
+
+  const handleDeleteProject = async (project) => {
+    const title = project.songTitle || project.name;
+    if (!window.confirm(`Delete "${title}" and all files in its local project folder? This cannot be undone.`)) return;
+    setDeletingProjectId(project.id);
+    setError("");
+    try {
+      await deleteProject(project.id);
+      setProjects((current) => current.filter((item) => item.id !== project.id));
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setDeletingProjectId("");
+    }
   };
 
   const totalStems = projects.reduce((total, project) => total + (project.stemCount || 0), 0);
@@ -97,7 +113,7 @@ export default function Dashboard() {
       {!loading && recentProjects.length ? (
         <section className="mt-4 grid gap-3 lg:grid-cols-3">
           {recentProjects.map((project) => (
-            <ProjectCard key={`recent-${project.id}`} project={project} compact />
+            <ProjectCard key={`recent-${project.id}`} project={project} compact onDelete={handleDeleteProject} deleting={deletingProjectId === project.id} />
           ))}
         </section>
       ) : null}
@@ -138,6 +154,11 @@ export default function Dashboard() {
           <ProcessingPanel title="Loading Projects" message="Reading local project metadata." />
         </div>
       ) : null}
+      {deletingProjectId ? (
+        <div className="mt-6">
+          <ProcessingPanel title="Deleting Project" message="Removing metadata and all local files for the selected project." />
+        </div>
+      ) : null}
 
       <section className="mt-4">
         {loading ? (
@@ -149,7 +170,7 @@ export default function Dashboard() {
         ) : projects.length ? (
           <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
             {projects.map((project) => (
-              <ProjectCard key={project.id} project={project} />
+              <ProjectCard key={project.id} project={project} onDelete={handleDeleteProject} deleting={deletingProjectId === project.id} />
             ))}
           </div>
         ) : (

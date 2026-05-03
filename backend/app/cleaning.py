@@ -167,7 +167,7 @@ def _run_cleaning_job(project_id: str, job_id: str) -> None:
         _fail_job(project_id, job_id, str(exc))
         return
 
-    _update_job(project_id, job_id, status="Processing", progress=1, message="Cleaning stems.")
+    _update_job(project_id, job_id, status="Processing", progress=2, message="Preparing cleaning job.")
     append_project_log(project_subdirs(project_id)["logs"], f"Cleaning job {job_id} started.")
 
     data = store.load()
@@ -183,7 +183,7 @@ def _run_cleaning_job(project_id: str, job_id: str) -> None:
             job_id,
             currentStemId=stem["id"],
             message=f"Cleaning {stem['originalFilename']}.",
-            progress=max(1, int(((index - 1) / total) * 100)),
+            progress=_item_progress(index, total, 0.0),
         )
         _update_stem_cleaning(project_id, stem["id"], status="Processing")
         try:
@@ -204,6 +204,13 @@ def _run_cleaning_job(project_id: str, job_id: str) -> None:
                 mode=settings["mode"],
                 hum_removal=bool(settings.get("humRemoval")),
                 hum_frequency=int(settings.get("humFrequency", 60)),
+                progress_callback=lambda fraction, message, stem=stem, index=index: _update_job(
+                    project_id,
+                    job_id,
+                    currentStemId=stem["id"],
+                    message=f"{message}: {stem['originalFilename']}.",
+                    progress=_item_progress(index, total, fraction),
+                ),
             )
             cleaned_path = display_path(result.path)
             cleaning_result = {
@@ -255,7 +262,7 @@ def _run_cleaning_job(project_id: str, job_id: str) -> None:
             _append_job_error(project_id, job_id, stem["id"], stem["originalFilename"], error_message)
             append_project_log(project_subdirs(project_id)["logs"], f"Cleaning failed for {stem['originalFilename']}: {error_message}")
 
-        _update_job(project_id, job_id, progress=int((index / total) * 100))
+        _update_job(project_id, job_id, progress=_item_progress(index, total, 1.0))
 
     final_status = "Completed" if successes > 0 else "Failed"
     final_message = "Cleaning completed." if final_status == "Completed" else "Cleaning failed for all enabled stems."
@@ -337,6 +344,14 @@ def _update_job(project_id: str, job_id: str, **updates: Any) -> None:
     job.update(updates)
     job["updatedAt"] = utc_now_iso()
     store.save(data)
+
+
+def _item_progress(index: int, total: int, fraction: float, start: int = 4, end: int = 96) -> int:
+    if total <= 0:
+        return start
+    safe_fraction = max(0.0, min(1.0, float(fraction)))
+    progress = start + (((index - 1) + safe_fraction) / total) * (end - start)
+    return max(start, min(end, int(round(progress))))
 
 
 def _append_job_error(project_id: str, job_id: str, stem_id: str, filename: str, error: str) -> None:

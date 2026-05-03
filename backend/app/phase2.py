@@ -113,7 +113,7 @@ def _run_analysis_job(project_id: str, job_id: str) -> None:
         append_project_log(project_subdirs(project_id)["logs"], f"Skipped completed analysis job {job_id}.")
         return
 
-    _update_job(project_id, job_id, status="Processing", progress=1, message="Analyzing stems.")
+    _update_job(project_id, job_id, status="Processing", progress=2, message="Preparing analysis job.")
     append_project_log(project_subdirs(project_id)["logs"], f"Analysis job {job_id} started.")
 
     data = store.load()
@@ -128,14 +128,23 @@ def _run_analysis_job(project_id: str, job_id: str) -> None:
             job_id,
             currentStemId=stem["id"],
             message=f"Analyzing {stem['originalFilename']}.",
-            progress=max(1, int(((index - 1) / total) * 100)),
+            progress=_item_progress(index, total, 0.0),
         )
         try:
             file_path = resolve_stored_file_path(stem["filePath"])
             if not file_path.exists():
                 raise FileNotFoundError(f"Stored file not found: {stem['filePath']}")
 
-            metrics = analyze_audio_file(file_path)
+            metrics = analyze_audio_file(
+                file_path,
+                progress_callback=lambda fraction, message, stem=stem, index=index: _update_job(
+                    project_id,
+                    job_id,
+                    currentStemId=stem["id"],
+                    message=f"{message}: {stem['originalFilename']}.",
+                    progress=_item_progress(index, total, fraction),
+                ),
+            )
             result = {
                 "stemId": stem["id"],
                 "status": "Completed",
@@ -171,7 +180,7 @@ def _run_analysis_job(project_id: str, job_id: str) -> None:
             _append_job_error(project_id, job_id, stem["id"], stem["originalFilename"], error_message)
             append_project_log(project_subdirs(project_id)["logs"], f"Analysis failed for {stem['originalFilename']}: {error_message}")
 
-        _update_job(project_id, job_id, progress=int((index / total) * 100))
+        _update_job(project_id, job_id, progress=_item_progress(index, total, 1.0))
 
     _refresh_analysis_warnings(project_id)
     final_status = "Completed" if successes > 0 else "Failed"
@@ -379,6 +388,14 @@ def _update_job(project_id: str, job_id: str, **updates: Any) -> None:
     job.update(updates)
     job["updatedAt"] = utc_now_iso()
     store.save(data)
+
+
+def _item_progress(index: int, total: int, fraction: float, start: int = 4, end: int = 96) -> int:
+    if total <= 0:
+        return start
+    safe_fraction = max(0.0, min(1.0, float(fraction)))
+    progress = start + (((index - 1) + safe_fraction) / total) * (end - start)
+    return max(start, min(end, int(round(progress))))
 
 
 def _fail_job(project_id: str, job_id: str, error_message: str) -> None:
