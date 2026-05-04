@@ -295,7 +295,7 @@ export default function AnalyzePage() {
         </div>
       </div>
 
-      <WorkflowGuide project={project} currentStep="analyze" className="mt-6" />
+      <WorkflowGuide project={project} currentStep="analyze" className="mt-6" onProjectRefresh={loadProject} />
 
       {error ? <p className="mt-5 rounded-lg border border-rose-300/20 bg-rose-400/10 px-3 py-2 text-sm text-rose-100">{error}</p> : null}
 

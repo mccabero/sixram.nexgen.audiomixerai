@@ -104,7 +104,7 @@ export default function GlobalJobStatus() {
 
   return (
     <div className="border-b border-white/10 bg-zinc-950/62 backdrop-blur-xl">
-      <div className="mx-auto max-w-7xl px-4 py-3 sm:px-6 lg:px-8">
+      <div className="mx-auto max-w-[1760px] px-4 py-3 sm:px-6 lg:px-8">
         {error && !visibleJob ? (
           <div className="rounded-lg border border-amber-300/20 bg-amber-300/10 px-3 py-2 text-sm text-amber-100">{error}</div>
         ) : null}

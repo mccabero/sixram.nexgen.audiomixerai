@@ -14,7 +14,7 @@ export const STEM_TYPES = [
   "Other",
 ];
 
-export const SUPPORTED_EXTENSIONS = [".wav", ".mp3", ".flac", ".aiff", ".aif"];
+export const SUPPORTED_EXTENSIONS = [".wav", ".mp3", ".flac", ".aiff", ".aif", ".webm"];
 export const MAX_UPLOAD_MB = 500;
 export const MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024;
 export const CLEANING_MODES = ["Off", "Light", "Medium", "Strong"];

@@ -94,9 +94,19 @@ def main() -> None:
         first_stem = reset.json()["stems"][0]
         stem_setting = client.patch(
             f"/api/projects/{project_id}/mix-settings/{first_stem['id']}",
-            json={"processingChainEnabled": True, "reverbSend": 42, "compressionAmount": 68},
+            json={"mute": True, "solo": True, "processingChainEnabled": False, "reverbSend": 42, "delaySend": 9, "presenceAmount": 12, "compressionAmount": 68},
         )
         assert stem_setting.status_code == 200, stem_setting.text
+        reset_stems = client.post(f"/api/projects/{project_id}/reset-stem-processing")
+        assert reset_stems.status_code == 200, reset_stems.text
+        reset_stem_setting = next(item for item in reset_stems.json()["mixSettings"]["stems"] if item["stemId"] == first_stem["id"])
+        assert reset_stem_setting["mute"] is False, reset_stem_setting
+        assert reset_stem_setting["solo"] is False, reset_stem_setting
+        assert reset_stem_setting["processingChainEnabled"] is True, reset_stem_setting
+        assert reset_stem_setting["reverbSend"] == 18, reset_stem_setting
+        assert reset_stem_setting["delaySend"] == 4, reset_stem_setting
+        assert reset_stem_setting["presenceAmount"] == 12, reset_stem_setting
+        assert reset_stem_setting["compressionAmount"] == 52, reset_stem_setting
 
         first_mix = client.post(f"/api/projects/{project_id}/advanced-mix")
         assert first_mix.status_code == 200, first_mix.text

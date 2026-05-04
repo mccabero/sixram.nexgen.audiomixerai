@@ -8,3 +8,4 @@ pyloudnorm==0.2.0
 imageio-ffmpeg==0.6.0
 librosa==0.11.0
 noisereduce==3.0.3
+sounddevice==0.5.5

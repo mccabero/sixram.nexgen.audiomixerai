@@ -197,7 +197,8 @@ async def save_uploaded_stems(project_id: str, files: list[UploadFile]) -> tuple
         extension = Path(original_filename).suffix.lower()
 
         if extension not in ALLOWED_EXTENSIONS:
-            error = f"Unsupported file type '{extension or 'none'}'. Supported formats: WAV, MP3, FLAC, AIFF."
+            supported_formats = ", ".join(ext[1:].upper() for ext in sorted(ALLOWED_EXTENSIONS))
+            error = f"Unsupported file type '{extension or 'none'}'. Supported formats: {supported_formats}."
             errors.append({"filename": original_filename, "error": error})
             append_project_log(dirs["logs"], f"Upload failed for {original_filename}: {error}")
             await upload.close()
@@ -254,6 +255,47 @@ async def save_uploaded_stems(project_id: str, files: list[UploadFile]) -> tuple
         store.save(data)
 
     return uploaded, errors
+
+
+def register_recorded_stems(project_id: str, file_paths: list[Path]) -> list[Stem]:
+    if not file_paths:
+        return []
+
+    data = store.load()
+    project = _find_project(data, project_id)
+    ensure_project_dirs(project_id)
+    now = utc_now_iso()
+    uploaded: list[Stem] = []
+
+    for path in file_paths:
+        if not path.exists():
+            raise HTTPException(status_code=500, detail=f"Recorded stem file is missing: {path.name}")
+
+        extension = path.suffix.lower()
+        if extension not in ALLOWED_EXTENSIONS:
+            raise HTTPException(status_code=400, detail=f"Recorded stem file has unsupported extension: {extension}")
+
+        stem = Stem(
+            id=uuid.uuid4().hex,
+            projectId=project_id,
+            originalFilename=path.name,
+            storedFilename=path.name,
+            filePath=_display_path(path),
+            fileExtension=extension,
+            fileSize=path.stat().st_size,
+            uploadedAt=now,
+            status="Uploaded",
+            stemType="Unknown",
+            metadata=StemMetadata(),
+        )
+        uploaded.append(stem)
+        project.setdefault("stems", []).append(stem.model_dump())
+        append_project_log(project_subdirs(project_id)["logs"], f"Registered recorded stem {path.name}.")
+
+    project["updatedAt"] = now
+    project["status"] = "Stems Uploaded"
+    store.save(data)
+    return uploaded
 
 
 def update_stem_type(project_id: str, stem_id: str, stem_type: str) -> Stem:
@@ -392,14 +434,14 @@ def _mark_interrupted_vocal_stems(project: dict[str, Any]) -> None:
         settings.setdefault("pitchCorrection", "Off")
         settings.setdefault("key", "Auto")
         settings.setdefault("scale", "Major")
-        settings.setdefault("fxStyle", "Natural Plate")
-        settings.setdefault("fxAmount", 25)
+        settings.setdefault("fxStyle", "Dry")
+        settings.setdefault("fxAmount", 0)
         settings.setdefault("bodyAmount", 0)
         settings.setdefault("presenceAmount", 0)
         settings.setdefault("airAmount", 0)
         settings.setdefault("deEssAmount", 50)
-        settings.setdefault("compressionAmount", 50)
-        settings.setdefault("riderAmount", 50)
+        settings.setdefault("compressionAmount", 45)
+        settings.setdefault("riderAmount", 45)
         settings.setdefault("saturationAmount", 50)
         settings.setdefault("doublerAmount", 50)
         settings.setdefault("breathReductionAmount", 35)
@@ -414,8 +456,8 @@ def _mark_interrupted_vocal_stems(project: dict[str, Any]) -> None:
             and result.get("pitchCorrection") == settings.get("pitchCorrection")
             and result.get("key") == settings.get("key")
             and result.get("scale") == settings.get("scale")
-            and result.get("fxStyle", "Natural Plate") == settings.get("fxStyle")
-            and float(result.get("fxAmount", 25)) == float(settings.get("fxAmount", 25))
+            and result.get("fxStyle", "Dry") == settings.get("fxStyle")
+            and float(result.get("fxAmount", 0)) == float(settings.get("fxAmount", 0))
             and _vocal_result_controls_match(result, settings)
             and bool(result.get("enhancedFilePath"))
         )
@@ -433,8 +475,8 @@ def _vocal_result_controls_match(result: dict[str, Any], settings: dict[str, Any
         "presenceAmount": 0,
         "airAmount": 0,
         "deEssAmount": 50,
-        "compressionAmount": 50,
-        "riderAmount": 50,
+        "compressionAmount": 45,
+        "riderAmount": 45,
         "saturationAmount": 50,
         "doublerAmount": 50,
         "breathReductionAmount": 35,
@@ -684,14 +726,14 @@ def _ensure_project_defaults(project: dict[str, Any]) -> None:
                 "pitchCorrection": "Off",
                 "key": "Auto",
                 "scale": "Major",
-                "fxStyle": "Natural Plate",
-                "fxAmount": 25,
+                "fxStyle": "Dry",
+                "fxAmount": 0,
                 "bodyAmount": 0,
                 "presenceAmount": 0,
                 "airAmount": 0,
                 "deEssAmount": 50,
-                "compressionAmount": 50,
-                "riderAmount": 50,
+                "compressionAmount": 45,
+                "riderAmount": 45,
                 "saturationAmount": 50,
                 "doublerAmount": 50,
                 "pitchStrength": 50,
@@ -704,14 +746,14 @@ def _ensure_project_defaults(project: dict[str, Any]) -> None:
         stem["vocalEnhancementSettings"].setdefault("pitchCorrection", "Off")
         stem["vocalEnhancementSettings"].setdefault("key", "Auto")
         stem["vocalEnhancementSettings"].setdefault("scale", "Major")
-        stem["vocalEnhancementSettings"].setdefault("fxStyle", "Natural Plate")
-        stem["vocalEnhancementSettings"].setdefault("fxAmount", 25)
+        stem["vocalEnhancementSettings"].setdefault("fxStyle", "Dry")
+        stem["vocalEnhancementSettings"].setdefault("fxAmount", 0)
         stem["vocalEnhancementSettings"].setdefault("bodyAmount", 0)
         stem["vocalEnhancementSettings"].setdefault("presenceAmount", 0)
         stem["vocalEnhancementSettings"].setdefault("airAmount", 0)
         stem["vocalEnhancementSettings"].setdefault("deEssAmount", 50)
-        stem["vocalEnhancementSettings"].setdefault("compressionAmount", 50)
-        stem["vocalEnhancementSettings"].setdefault("riderAmount", 50)
+        stem["vocalEnhancementSettings"].setdefault("compressionAmount", 45)
+        stem["vocalEnhancementSettings"].setdefault("riderAmount", 45)
         stem["vocalEnhancementSettings"].setdefault("saturationAmount", 50)
         stem["vocalEnhancementSettings"].setdefault("doublerAmount", 50)
         stem["vocalEnhancementSettings"].setdefault("breathReductionAmount", 35)
@@ -819,19 +861,19 @@ def _refresh_detection_summary(project: dict[str, Any], data: dict[str, Any]) ->
 def _default_mix_controls() -> dict[str, float | str]:
     return {
         "preset": "Balanced",
-        "vocalBoost": 1.5,
-        "vocalBusLevel": 0,
-        "vocalGlueAmount": 45,
-        "vocalDelayAmount": 25,
-        "backingVocalWidth": 60,
+        "vocalBoost": 2.0,
+        "vocalBusLevel": 0.4,
+        "vocalGlueAmount": 22,
+        "vocalDelayAmount": 4,
+        "backingVocalWidth": 55,
         "drumPunch": 50,
         "bassWeight": 50,
         "brightness": 0,
         "warmth": 0,
         "width": 55,
-        "reverbAmount": 35,
-        "vocalReverbAmount": 35,
-        "roomSize": 45,
+        "reverbAmount": 24,
+        "vocalReverbAmount": 14,
+        "roomSize": 38,
     }
 
 

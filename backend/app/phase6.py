@@ -1,4 +1,5 @@
 import json
+import re
 import threading
 import uuid
 import zipfile
@@ -199,7 +200,7 @@ def generate_master(project_id: str, payload: GenerateMasterRequest, progress_ca
     masters_dir = project_subdirs(project_id)["exports"] / "masters"
     reports_dir = project_subdirs(project_id)["exports"] / "reports"
     version_number = _next_master_version(project, masters_dir)
-    label = f"master_v{version_number:03d}"
+    label = _master_output_stem(project, version_number)
     output_path = masters_dir / f"{label}{_format_extension(payload.outputFormat)}"
     report_json_path = reports_dir / f"{label}_report.json"
     report_txt_path = reports_dir / f"{label}_report.txt"
@@ -233,6 +234,8 @@ def generate_master(project_id: str, payload: GenerateMasterRequest, progress_ca
         "truePeakCeilingDb": TRUE_PEAK_CEILING_DB,
         "sourceMixVersionId": payload.selectedMixVersionId,
         "sourceMixLabel": mix_version.get("label"),
+        "trimStartSeconds": payload.trimStartSeconds,
+        "trimEndSeconds": payload.trimEndSeconds,
         "inputMetrics": result.input_metrics,
         "outputMetrics": result.output_metrics,
         "operations": result.operations,
@@ -285,6 +288,8 @@ def generate_master(project_id: str, payload: GenerateMasterRequest, progress_ca
             "limiterStrength": payload.limiterStrength,
             "stereoWidth": payload.stereoWidth,
             "outputFormat": payload.outputFormat,
+            "trimStartSeconds": payload.trimStartSeconds,
+            "trimEndSeconds": payload.trimEndSeconds,
         }
     )
     settings["updatedAt"] = now
@@ -361,7 +366,14 @@ def _export_selected_mix(project_id: str, payload: ExportMixRequest, export_type
     version_number = _next_export_number(project, output_dir, prefix, _format_extension(payload.outputFormat))
     output_path = output_dir / f"{prefix}_v{version_number:03d}{_format_extension(payload.outputFormat)}"
     append_project_log(project_subdirs(project_id)["logs"], f"Exporting {export_type.lower()} from {mix_version.get('label', 'selected mix')} to {payload.outputFormat}.")
-    export_audio_file(input_path, output_path, payload.outputFormat)
+    export_metrics = export_audio_file(
+        input_path,
+        output_path,
+        payload.outputFormat,
+        trim_start_seconds=payload.trimStartSeconds,
+        trim_end_seconds=payload.trimEndSeconds,
+    )
+    operations = export_metrics.get("operations") or []
     export_file = _export_file_record(
         project_id=project_id,
         export_type=export_type,
@@ -369,8 +381,11 @@ def _export_selected_mix(project_id: str, payload: ExportMixRequest, export_type
         path=output_path,
         output_format=payload.outputFormat,
         source_mix_version_id=payload.selectedMixVersionId,
+        warnings=operations,
     )
     _save_export_record(project_id, export_file)
+    for operation in operations:
+        append_project_log(project_subdirs(project_id)["logs"], f"{export_type} processing: {operation}")
     append_project_log(project_subdirs(project_id)["logs"], f"{export_type} saved to {export_file['filePath']}.")
     return ExportFile(**export_file)
 
@@ -429,6 +444,8 @@ def _default_mastering_controls() -> dict[str, Any]:
         "limiterStrength": 55,
         "stereoWidth": 55,
         "outputFormat": "WAV 16-bit",
+        "trimStartSeconds": 0,
+        "trimEndSeconds": 0,
     }
 
 
@@ -458,9 +475,20 @@ def _next_master_version(project: dict[str, Any], output_dir: Path) -> int:
     output_dir.mkdir(parents=True, exist_ok=True)
     existing = [int(item.get("versionNumber", 0)) for item in project.get("masteringSettings", {}).get("masterVersions", [])]
     number = max(existing, default=0) + 1
-    while any((output_dir / f"master_v{number:03d}{details['extension']}").exists() for details in OUTPUT_FORMATS.values()):
+    while any((output_dir / f"{_master_output_stem(project, number)}{details['extension']}").exists() for details in OUTPUT_FORMATS.values()):
         number += 1
     return number
+
+
+def _master_output_stem(project: dict[str, Any], version_number: int) -> str:
+    base = _safe_project_filename(project.get("name") or project.get("songTitle") or "master")
+    return base if version_number <= 1 else f"{base}_v{version_number:03d}"
+
+
+def _safe_project_filename(value: str) -> str:
+    candidate = (value or "").strip() or "master"
+    candidate = re.sub(r"[^A-Za-z0-9._-]+", "_", candidate)
+    return candidate[:80].strip("._-") or "master"
 
 
 def _next_export_number(project: dict[str, Any], output_dir: Path, prefix: str, extension: str) -> int:
@@ -509,6 +537,7 @@ def _export_file_record(
     output_format: str | None,
     source_mix_version_id: str | None,
     include_originals: bool | None = None,
+    warnings: list[str] | None = None,
 ) -> dict[str, Any]:
     file_path = display_path(path)
     return {
@@ -523,7 +552,7 @@ def _export_file_record(
         "fileUrl": _media_url(file_path),
         "sizeBytes": path.stat().st_size if path.exists() else None,
         "includeOriginalStems": include_originals,
-        "warnings": [],
+        "warnings": warnings or [],
     }
 
 

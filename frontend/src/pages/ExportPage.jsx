@@ -1,4 +1,4 @@
-import { ArrowLeft, Archive, Download, FileAudio, Gauge, RefreshCw, ShieldCheck, Sparkles, Trash2, TriangleAlert } from "lucide-react";
+import { ArrowLeft, Archive, CheckCircle2, Download, FileAudio, Gauge, RefreshCw, Scissors, ShieldCheck, Sparkles, Trash2, TriangleAlert } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import {
@@ -19,7 +19,7 @@ import ProcessingPanel from "../components/ProcessingPanel.jsx";
 import StatusBadge from "../components/StatusBadge.jsx";
 import WaveformPreview from "../components/WaveformPreview.jsx";
 import WorkflowGuide from "../components/WorkflowGuide.jsx";
-import { formatBytes, formatDateTime, formatDb, formatLufs, formatPercent } from "../utils/format.js";
+import { formatBytes, formatDateTime, formatDb, formatDuration, formatLufs, formatPercent } from "../utils/format.js";
 
 const defaultControls = {
   selectedMixVersionId: null,
@@ -30,6 +30,8 @@ const defaultControls = {
   limiterStrength: 55,
   stereoWidth: 55,
   outputFormat: "WAV 16-bit",
+  trimStartSeconds: 0,
+  trimEndSeconds: 0,
 };
 const runningStatuses = new Set(["Pending", "Processing"]);
 
@@ -44,9 +46,11 @@ export default function ExportPage() {
   const [latestMaster, setLatestMaster] = useState(null);
   const [latestExport, setLatestExport] = useState(null);
   const [masterJob, setMasterJob] = useState(null);
+  const [updatedMasterId, setUpdatedMasterId] = useState("");
   const [includeOriginals, setIncludeOriginals] = useState(false);
   const [compareA, setCompareA] = useState("");
   const [compareB, setCompareB] = useState("");
+  const [selectedMixDuration, setSelectedMixDuration] = useState(Number.NaN);
 
   const mixVersions = project?.mixSettings?.mixVersions || [];
   const masteringSettings = project?.masteringSettings || {};
@@ -55,10 +59,16 @@ export default function ExportPage() {
   const exportFiles = masteringSettings.exportFiles || [];
   const selectedMixId = controls.selectedMixVersionId || project?.mixSettings?.latestMixVersionId || mixVersions[mixVersions.length - 1]?.id || "";
   const selectedMix = mixVersions.find((version) => version.id === selectedMixId) || null;
+  const selectedMixUrl = selectedMix?.mp3Url || selectedMix?.wavUrl || "";
   const selectedPreset = presetPayload.presets.find((preset) => preset.name === controls.preset);
   const selectedFormat = presetPayload.outputFormats.find((format) => format.name === controls.outputFormat);
   const selectedMixHasVocals = selectedMix?.sourceFiles?.some((source) => ["Lead Vocal", "Backing Vocal"].includes(source.stemType));
   const masterRunning = Boolean(masterJob && runningStatuses.has(masterJob.status));
+  const trimStartSeconds = Math.max(0, Number(controls.trimStartSeconds) || 0);
+  const trimEndSeconds = Math.max(0, Number(controls.trimEndSeconds) || 0);
+  const trimActive = trimStartSeconds > 0 || trimEndSeconds > 0;
+  const estimatedTrimmedDuration = Number.isFinite(selectedMixDuration) ? Math.max(0, selectedMixDuration - trimStartSeconds - trimEndSeconds) : Number.NaN;
+  const trimTooAggressive = Number.isFinite(estimatedTrimmedDuration) && estimatedTrimmedDuration < 0.5;
 
   const comparisonOptions = useMemo(() => {
     const options = [];
@@ -121,6 +131,8 @@ export default function ExportPage() {
           if (latest) {
             setLatestMaster(latest);
             setCompareA(latest.id);
+            setUpdatedMasterId(latest.id);
+            setNotice(`Master updated: ${latest.label} is ready to review.`);
           }
           setActionLoading("");
           if (nextJob.status === "Failed") {
@@ -144,6 +156,25 @@ export default function ExportPage() {
       setCompareB(comparisonOptions[0].id);
     }
   }, [comparisonOptions, compareA, compareB]);
+
+  useEffect(() => {
+    if (!selectedMixUrl) {
+      setSelectedMixDuration(Number.NaN);
+      return undefined;
+    }
+    const audio = new Audio();
+    const handleLoadedMetadata = () => setSelectedMixDuration(audio.duration);
+    const handleError = () => setSelectedMixDuration(Number.NaN);
+    audio.preload = "metadata";
+    audio.addEventListener("loadedmetadata", handleLoadedMetadata);
+    audio.addEventListener("error", handleError);
+    audio.src = selectedMixUrl;
+    return () => {
+      audio.removeEventListener("loadedmetadata", handleLoadedMetadata);
+      audio.removeEventListener("error", handleError);
+      audio.src = "";
+    };
+  }, [selectedMixUrl]);
 
   const refreshProject = async () => {
     setActionLoading("refresh");
@@ -188,6 +219,7 @@ export default function ExportPage() {
     setActionLoading("master");
     setError("");
     setNotice("");
+    setUpdatedMasterId("");
     let queued = false;
     try {
       const payload = {
@@ -199,6 +231,8 @@ export default function ExportPage() {
         compressionAmount: controls.compressionAmount,
         limiterStrength: controls.limiterStrength,
         stereoWidth: controls.stereoWidth,
+        trimStartSeconds,
+        trimEndSeconds,
       };
       const job = await startMasteringJob(projectId, payload);
       setMasterJob(job);
@@ -215,7 +249,12 @@ export default function ExportPage() {
     setActionLoading("exportMix");
     setError("");
     try {
-      const exported = await exportMixWithoutMastering(projectId, { selectedMixVersionId: selectedMixId, outputFormat: controls.outputFormat });
+      const exported = await exportMixWithoutMastering(projectId, {
+        selectedMixVersionId: selectedMixId,
+        outputFormat: controls.outputFormat,
+        trimStartSeconds,
+        trimEndSeconds,
+      });
       setLatestExport(exported);
       await loadProject();
     } catch (err) {
@@ -229,7 +268,12 @@ export default function ExportPage() {
     setActionLoading("instrumental");
     setError("");
     try {
-      const exported = await exportInstrumental(projectId, { selectedMixVersionId: selectedMixId, outputFormat: controls.outputFormat });
+      const exported = await exportInstrumental(projectId, {
+        selectedMixVersionId: selectedMixId,
+        outputFormat: controls.outputFormat,
+        trimStartSeconds,
+        trimEndSeconds,
+      });
       setLatestExport(exported);
       await loadProject();
     } catch (err) {
@@ -261,6 +305,7 @@ export default function ExportPage() {
     try {
       setProject(await deleteMasters(projectId));
       setLatestMaster(null);
+      setUpdatedMasterId("");
       setCompareA("");
       setCompareB("");
     } catch (err) {
@@ -293,6 +338,7 @@ export default function ExportPage() {
   const selectedA = comparisonOptions.find((option) => option.id === compareA);
   const selectedB = comparisonOptions.find((option) => option.id === compareB);
   const shownLatestMaster = latestMaster || masterVersions.find((master) => master.id === masteringSettings.latestMasterVersionId) || masterVersions[masterVersions.length - 1] || null;
+  const masterJustUpdated = Boolean(shownLatestMaster && shownLatestMaster.id === updatedMasterId);
 
   return (
     <div>
@@ -323,7 +369,7 @@ export default function ExportPage() {
         </div>
       </div>
 
-      <WorkflowGuide project={project} currentStep="export" className="mt-6" />
+      <WorkflowGuide project={project} currentStep="export" className="mt-6" onProjectRefresh={loadProject} />
 
       {error ? <p className="mt-5 rounded-lg border border-rose-300/20 bg-rose-400/10 px-3 py-2 text-sm text-rose-100">{error}</p> : null}
       {notice ? <p className="mt-5 rounded-lg border border-amber-300/20 bg-amber-300/10 px-3 py-2 text-sm text-amber-100">{notice}</p> : null}
@@ -401,6 +447,23 @@ export default function ExportPage() {
                 <Readout label="True Peak Ceiling" value={formatDb(presetPayload.truePeakCeilingDb)} />
               </div>
 
+              <CropPanel
+                selectedMix={selectedMix}
+                selectedMixUrl={selectedMixUrl}
+                selectedMixDuration={selectedMixDuration}
+                estimatedTrimmedDuration={estimatedTrimmedDuration}
+                trimStartSeconds={trimStartSeconds}
+                trimEndSeconds={trimEndSeconds}
+                trimActive={trimActive}
+                trimTooAggressive={trimTooAggressive}
+                onChange={(key, value) => updateControlLocal({ [key]: value })}
+                onCommit={(key, value) => commitControls({ [key]: value })}
+                onReset={() => {
+                  updateControlLocal({ trimStartSeconds: 0, trimEndSeconds: 0 });
+                  commitControls({ trimStartSeconds: 0, trimEndSeconds: 0 });
+                }}
+              />
+
               <div className="mt-4 grid gap-4 sm:grid-cols-2">
                 <ControlSlider label="Brightness" value={controls.brightness} min={-50} max={50} display={signedPercent(controls.brightness)} onChange={(value) => updateControlLocal({ brightness: value })} onCommit={(value) => commitControls({ brightness: value })} />
                 <ControlSlider label="Warmth" value={controls.warmth} min={-50} max={50} display={signedPercent(controls.warmth)} onChange={(value) => updateControlLocal({ warmth: value })} onCommit={(value) => commitControls({ warmth: value })} />
@@ -426,7 +489,7 @@ export default function ExportPage() {
               </div>
             </div>
 
-            <LatestMasterPanel master={shownLatestMaster} selectedMix={selectedMix} />
+            <LatestMasterPanel master={shownLatestMaster} selectedMix={selectedMix} recentlyUpdated={masterJustUpdated} />
           </section>
 
           <section className="mt-6 grid gap-5 xl:grid-cols-[1.05fr_0.95fr]">
@@ -479,9 +542,9 @@ function MasteringPresetCards({ presets, selectedPreset, onSelect }) {
   );
 }
 
-function LatestMasterPanel({ master, selectedMix }) {
+function LatestMasterPanel({ master, selectedMix, recentlyUpdated }) {
   return (
-    <div className="rounded-lg border border-white/10 bg-white/[0.04] p-4">
+    <div className={`rounded-lg border bg-white/[0.04] p-4 ${recentlyUpdated ? "border-emerald-300/25 shadow-[0_0_32px_rgba(16,185,129,0.12)]" : "border-white/10"}`}>
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <h2 className="font-semibold text-white">Loudness Report</h2>
@@ -492,6 +555,15 @@ function LatestMasterPanel({ master, selectedMix }) {
 
       {master ? (
         <div className="mt-4 space-y-4">
+          {recentlyUpdated ? (
+            <div className="rounded-lg border border-emerald-300/20 bg-emerald-300/10 px-3 py-2">
+              <p className="inline-flex items-center gap-2 text-sm font-semibold text-emerald-100">
+                <CheckCircle2 size={16} />
+                Master Updated
+              </p>
+              <p className="mt-1 text-xs leading-5 text-zinc-300">This output was refreshed by the latest mastering run and is ready for review.</p>
+            </div>
+          ) : null}
           <div className="grid gap-3 sm:grid-cols-3">
             <Readout label="LUFS" value={formatLufs(master.integratedLufs)} />
             <Readout label="Peak" value={formatDb(master.peakDbfs)} />
@@ -628,6 +700,7 @@ function ExportFilesPanel({ exportFiles, latestExport, includeOriginals, setIncl
                   <p className="truncate font-semibold text-white">{file.label}</p>
                   <p className="mt-1 truncate text-xs text-zinc-500">{file.filePath}</p>
                   <p className="mt-1 text-xs text-zinc-500">{file.outputFormat || file.type} - {formatBytes(file.sizeBytes)}</p>
+                  {file.warnings?.length ? <p className="mt-2 text-xs text-amber-100">{file.warnings[0]}</p> : null}
                 </div>
                 <Button as="a" href={file.fileUrl} target="_blank" rel="noreferrer" variant="secondary" className="shrink-0">
                   <Download size={17} />
@@ -655,6 +728,105 @@ function SelectControl({ label, value, options, onChange }) {
           </option>
         ))}
       </select>
+    </label>
+  );
+}
+
+function CropPanel({
+  selectedMix,
+  selectedMixUrl,
+  selectedMixDuration,
+  estimatedTrimmedDuration,
+  trimStartSeconds,
+  trimEndSeconds,
+  trimActive,
+  trimTooAggressive,
+  onChange,
+  onCommit,
+  onReset,
+}) {
+  return (
+    <div className="mt-4 rounded-lg border border-white/10 bg-black/20 p-4">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <p className="inline-flex items-center gap-2 text-sm font-semibold text-white">
+            <Scissors size={16} />
+            Crop Before Master/Export
+          </p>
+          <p className="mt-1 text-sm text-zinc-400">Trim the intro or tail for every master and export generated from this page. The original mix version stays untouched.</p>
+        </div>
+        <Button type="button" variant="secondary" onClick={onReset} disabled={!trimActive} className="sm:w-auto">
+          Reset Crop
+        </Button>
+      </div>
+
+      <div className="mt-4 grid gap-4 lg:grid-cols-[minmax(0,1fr)_220px_220px]">
+        <div className="min-w-0">
+          <p className="mb-2 text-xs font-semibold uppercase tracking-[0.12em] text-zinc-500">Selected Mix Preview</p>
+          {selectedMixUrl ? (
+            <div className="space-y-3">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="rounded-full border border-white/10 bg-white/[0.06] px-2 py-0.5 text-xs font-semibold text-zinc-300">{selectedMix?.label || "Selected mix"}</span>
+                <span className="rounded-full border border-white/10 bg-black/25 px-2 py-0.5 text-xs font-semibold text-zinc-400">
+                  {Number.isFinite(selectedMixDuration) ? `Length ${formatDuration(selectedMixDuration)}` : "Length pending"}
+                </span>
+                {trimActive && Number.isFinite(estimatedTrimmedDuration) ? (
+                  <span className="rounded-full border border-teal-300/20 bg-teal-300/10 px-2 py-0.5 text-xs font-semibold text-teal-100">
+                    Output {formatDuration(estimatedTrimmedDuration)}
+                  </span>
+                ) : null}
+              </div>
+              <WaveformPreview src={selectedMixUrl} variant="teal" />
+              <audio className="w-full" src={selectedMixUrl} controls preload="metadata" />
+            </div>
+          ) : (
+            <p className="rounded-lg border border-white/10 bg-black/20 px-3 py-3 text-sm text-zinc-500">Select a mix version to set the crop range.</p>
+          )}
+        </div>
+
+        <SecondsControl
+          label="Trim Intro"
+          helper="Seconds removed from the beginning."
+          value={trimStartSeconds}
+          onChange={(value) => onChange("trimStartSeconds", value)}
+          onCommit={(value) => onCommit("trimStartSeconds", value)}
+        />
+        <SecondsControl
+          label="Trim Tail"
+          helper="Optional seconds removed from the end."
+          value={trimEndSeconds}
+          onChange={(value) => onChange("trimEndSeconds", value)}
+          onCommit={(value) => onCommit("trimEndSeconds", value)}
+        />
+      </div>
+
+      {trimTooAggressive ? (
+        <p className="mt-4 rounded-lg border border-rose-300/20 bg-rose-400/10 px-3 py-2 text-sm text-rose-100">The current crop range leaves less than half a second of audio. Reduce the trim before exporting.</p>
+      ) : trimActive ? (
+        <p className="mt-4 rounded-lg border border-amber-300/20 bg-amber-300/10 px-3 py-2 text-sm text-amber-100">Crop is active. New master and export renders from this page will use the trimmed range.</p>
+      ) : null}
+    </div>
+  );
+}
+
+function SecondsControl({ label, helper, value, onChange, onCommit }) {
+  const safeValue = Number.isFinite(value) ? value : 0;
+  return (
+    <label className="block">
+      <span className="mb-2 block text-xs font-semibold uppercase tracking-[0.12em] text-zinc-500">{label}</span>
+      <input
+        type="number"
+        min="0"
+        step="0.1"
+        value={safeValue}
+        onChange={(event) => onChange(Math.max(0, Number(event.target.value) || 0))}
+        onBlur={(event) => onCommit(Math.max(0, Number(event.currentTarget.value) || 0))}
+        onKeyDown={(event) => {
+          if (event.key === "Enter") event.currentTarget.blur();
+        }}
+        className="h-10 w-full rounded-lg border border-white/10 bg-black/25 px-3 text-sm text-white"
+      />
+      <p className="mt-2 text-xs leading-5 text-zinc-500">{helper}</p>
     </label>
   );
 }

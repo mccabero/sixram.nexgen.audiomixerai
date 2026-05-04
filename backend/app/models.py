@@ -74,6 +74,8 @@ class UpdateMasteringControlsRequest(BaseModel):
     limiterStrength: float | None = Field(default=None, ge=0, le=100)
     stereoWidth: float | None = Field(default=None, ge=0, le=100)
     outputFormat: str | None = None
+    trimStartSeconds: float | None = Field(default=None, ge=0)
+    trimEndSeconds: float | None = Field(default=None, ge=0)
 
 
 class GenerateMasterRequest(BaseModel):
@@ -85,11 +87,15 @@ class GenerateMasterRequest(BaseModel):
     compressionAmount: float = Field(default=45, ge=0, le=100)
     limiterStrength: float = Field(default=55, ge=0, le=100)
     stereoWidth: float = Field(default=55, ge=0, le=100)
+    trimStartSeconds: float = Field(default=0, ge=0)
+    trimEndSeconds: float = Field(default=0, ge=0)
 
 
 class ExportMixRequest(BaseModel):
     selectedMixVersionId: str
     outputFormat: str
+    trimStartSeconds: float = Field(default=0, ge=0)
+    trimEndSeconds: float = Field(default=0, ge=0)
 
 
 class ProjectBackupRequest(BaseModel):
@@ -231,14 +237,14 @@ class StemVocalEnhancementSettings(BaseModel):
     pitchCorrection: str = "Off"
     key: str = "Auto"
     scale: str = "Major"
-    fxStyle: str = "Natural Plate"
-    fxAmount: float = 25
+    fxStyle: str = "Dry"
+    fxAmount: float = 0
     bodyAmount: float = 0
     presenceAmount: float = 0
     airAmount: float = 0
     deEssAmount: float = 50
-    compressionAmount: float = 50
-    riderAmount: float = 50
+    compressionAmount: float = 45
+    riderAmount: float = 45
     saturationAmount: float = 50
     doublerAmount: float = 50
     breathReductionAmount: float = 35
@@ -260,14 +266,14 @@ class StemVocalEnhancementResult(BaseModel):
     pitchCorrection: str = "Off"
     key: str = "Auto"
     scale: str = "Major"
-    fxStyle: str = "Natural Plate"
-    fxAmount: float = 25
+    fxStyle: str = "Dry"
+    fxAmount: float = 0
     bodyAmount: float = 0
     presenceAmount: float = 0
     airAmount: float = 0
     deEssAmount: float = 50
-    compressionAmount: float = 50
-    riderAmount: float = 50
+    compressionAmount: float = 45
+    riderAmount: float = 45
     saturationAmount: float = 50
     doublerAmount: float = 50
     breathReductionAmount: float = 35
@@ -359,24 +365,24 @@ class MixStemSetting(BaseModel):
     reverbSend: float = 35
     delaySend: float = 0
     presenceAmount: float = 0
-    compressionAmount: float = 50
+    compressionAmount: float = 45
 
 
 class MixControls(BaseModel):
     preset: str = "Balanced"
     vocalBoost: float = 1.5
     vocalBusLevel: float = 0
-    vocalGlueAmount: float = 45
-    vocalDelayAmount: float = 25
-    backingVocalWidth: float = 60
+    vocalGlueAmount: float = 32
+    vocalDelayAmount: float = 12
+    backingVocalWidth: float = 55
     drumPunch: float = 50
     bassWeight: float = 50
     brightness: float = 0
     warmth: float = 0
     width: float = 55
-    reverbAmount: float = 35
-    vocalReverbAmount: float = 35
-    roomSize: float = 45
+    reverbAmount: float = 24
+    vocalReverbAmount: float = 22
+    roomSize: float = 38
 
 
 class MixVersionSource(BaseModel):
@@ -440,6 +446,8 @@ class MasteringControls(BaseModel):
     limiterStrength: float = 55
     stereoWidth: float = 55
     outputFormat: str = "WAV 16-bit"
+    trimStartSeconds: float = 0
+    trimEndSeconds: float = 0
 
 
 class LoudnessReport(BaseModel):
@@ -578,6 +586,53 @@ class UploadError(BaseModel):
 class UploadResponse(BaseModel):
     uploaded: list[Stem]
     errors: list[UploadError]
+
+
+class AudioInputDevice(BaseModel):
+    id: int
+    name: str
+    hostApi: str
+    maxInputChannels: int
+    defaultSampleRate: int
+    isDefault: bool = False
+    isZoomDevice: bool = False
+
+
+class AudioInputDeviceListResponse(BaseModel):
+    devices: list[AudioInputDevice] = Field(default_factory=list)
+
+
+class StartDirectRecordingRequest(BaseModel):
+    deviceId: int
+    channelCount: int | None = Field(default=None, ge=1, le=64)
+    sampleRate: int | None = Field(default=None, ge=8000, le=192000)
+    splitToMono: bool = True
+    baseName: str | None = Field(default=None, max_length=80)
+
+
+class DirectRecordingStatus(BaseModel):
+    projectId: str
+    active: bool = False
+    status: str = "Idle"
+    sessionId: str | None = None
+    deviceId: int | None = None
+    deviceName: str | None = None
+    hostApi: str | None = None
+    channelCount: int | None = None
+    sampleRate: int | None = None
+    splitToMono: bool = True
+    startedAt: str | None = None
+    durationSeconds: float = 0
+    framesCaptured: int = 0
+    multitrackFilePath: str | None = None
+    multitrackFileUrl: str | None = None
+    error: str | None = None
+
+
+class StopDirectRecordingResponse(BaseModel):
+    recording: DirectRecordingStatus
+    uploaded: list[Stem] = Field(default_factory=list)
+    errors: list[str] = Field(default_factory=list)
 
 
 class RoughMixResponse(BaseModel):

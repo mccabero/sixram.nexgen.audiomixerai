@@ -39,6 +39,27 @@ export function getProject(projectId) {
   return request(`/projects/${projectId}`);
 }
 
+export function listAudioInputDevices() {
+  return request("/audio-input-devices");
+}
+
+export function getDirectRecordingStatus(projectId) {
+  return request(`/projects/${projectId}/direct-recording`);
+}
+
+export function startDirectRecording(projectId, payload) {
+  return request(`/projects/${projectId}/direct-recording/start`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function stopDirectRecording(projectId) {
+  return request(`/projects/${projectId}/direct-recording/stop`, {
+    method: "POST",
+  });
+}
+
 export function getProjectLogs(projectId, limit = 120) {
   return request(`/projects/${projectId}/logs?limit=${encodeURIComponent(limit)}`);
 }
@@ -256,6 +277,12 @@ export function updateMixControls(projectId, updates) {
 
 export function resetAdvancedMix(projectId) {
   return request(`/projects/${projectId}/reset-advanced-mix`, {
+    method: "POST",
+  });
+}
+
+export function resetStemProcessing(projectId) {
+  return request(`/projects/${projectId}/reset-stem-processing`, {
     method: "POST",
   });
 }

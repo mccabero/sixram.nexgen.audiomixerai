@@ -146,7 +146,7 @@ export default function ProjectDetail() {
           </dl>
         </section>
 
-        <WorkflowGuide project={project} currentStep="project" className="mt-5" />
+        <WorkflowGuide project={project} currentStep="project" className="mt-5" onProjectRefresh={loadProject} />
       </div>
 
       {error ? <p className="mt-5 rounded-lg border border-rose-300/20 bg-rose-400/10 px-3 py-2 text-sm text-rose-100">{error}</p> : null}

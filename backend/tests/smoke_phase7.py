@@ -142,6 +142,8 @@ def main() -> None:
         assert fixed_settings["enabled"] is True
         assert fixed_settings["useEnhancedInMix"] is True
         assert fixed_settings["doublerAmount"] <= 35
+        assert fixed_settings["fxStyle"] == "Dry"
+        assert fixed_settings["fxAmount"] == 0
 
         job = create_vocal_enhancement_job(project_id)
         run_vocal_enhancement_job(project_id, job.id)
@@ -154,8 +156,8 @@ def main() -> None:
         assert resolve_stored_file_path(result["enhancedFilePath"]).exists(), result
         assert result["enhancedMetrics"]["peakDbfs"] is not None, result
         assert result["preset"] in {"Pop Vocal", "Bright AI Polish", "Live Vocal Fix"}, result
-        assert result["fxStyle"] == "Slap Delay", result
-        assert result["fxAmount"] <= 35, result
+        assert result["fxStyle"] == "Dry", result
+        assert result["fxAmount"] == 0, result
         assert result["presenceAmount"] >= 10, result
         assert result["doublerAmount"] <= 35, result
         assert result["breathReductionAmount"] == 65, result

@@ -338,7 +338,7 @@ export default function VocalEnhancerPage() {
         </div>
       </div>
 
-      <WorkflowGuide project={project} currentStep="vocals" className="mt-6" />
+      <WorkflowGuide project={project} currentStep="vocals" className="mt-6" onProjectRefresh={loadProject} />
 
       {error ? <p className="mt-5 rounded-lg border border-rose-300/20 bg-rose-400/10 px-3 py-2 text-sm text-rose-100">{error}</p> : null}
 
@@ -927,14 +927,14 @@ function vocalSettings(stem) {
     pitchCorrection: "Off",
     key: "Auto",
     scale: "Major",
-    fxStyle: "Natural Plate",
-    fxAmount: 25,
+    fxStyle: "Dry",
+    fxAmount: 0,
     bodyAmount: 0,
     presenceAmount: 0,
     airAmount: 0,
     deEssAmount: 50,
-    compressionAmount: 50,
-    riderAmount: 50,
+    compressionAmount: 45,
+    riderAmount: 45,
     saturationAmount: 50,
     doublerAmount: 50,
     breathReductionAmount: 35,

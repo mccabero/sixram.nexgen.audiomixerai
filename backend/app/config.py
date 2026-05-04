@@ -12,7 +12,7 @@ DB_PATH = STORAGE_ROOT / "app_data.json"
 MAX_UPLOAD_MB = int(os.getenv("AUDIO_MIXER_MAX_UPLOAD_MB", "500"))
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
 
-ALLOWED_EXTENSIONS = {".wav", ".mp3", ".flac", ".aiff", ".aif"}
+ALLOWED_EXTENSIONS = {".wav", ".mp3", ".flac", ".aiff", ".aif", ".webm"}
 
 STEM_TYPES = [
     "Unknown",

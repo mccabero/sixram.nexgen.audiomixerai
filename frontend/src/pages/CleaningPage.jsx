@@ -1,4 +1,4 @@
-import { ArrowLeft, CheckCircle2, Eraser, Gauge, Power, RefreshCw, SlidersHorizontal, Sparkles, Trash2 } from "lucide-react";
+import { AlertTriangle, ArrowLeft, CheckCircle2, Eraser, Gauge, Power, RefreshCw, SlidersHorizontal, Sparkles, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { deleteCleanedStems, getProcessingJob, getProject, startCleaning, updateCleaningSettings } from "../api.js";
@@ -25,10 +25,34 @@ export default function CleaningPage() {
   const [error, setError] = useState("");
 
   const stems = project?.stems || [];
+  const suggestionEntries = useMemo(
+    () =>
+      stems
+        .map((stem) => {
+          const suggestion = getCleaningSuggestion(stem);
+          if (!suggestion) return null;
+          return { stem, suggestion, state: getCleaningSuggestionState(stem, suggestion) };
+        })
+        .filter(Boolean)
+        .sort(compareSuggestionEntries),
+    [stems],
+  );
+  const actionableSuggestionEntries = useMemo(() => suggestionEntries.filter((entry) => entry.state !== "done"), [suggestionEntries]);
+  const suggestionLookup = useMemo(() => new Map(suggestionEntries.map((entry) => [entry.stem.id, entry])), [suggestionEntries]);
+  const displayedStems = useMemo(() => {
+    if (!actionableSuggestionEntries.length) return stems;
+    const priority = new Map(actionableSuggestionEntries.map((entry, index) => [entry.stem.id, index]));
+    return [...stems].sort((left, right) => {
+      const leftPriority = priority.has(left.id) ? priority.get(left.id) : Number.POSITIVE_INFINITY;
+      const rightPriority = priority.has(right.id) ? priority.get(right.id) : Number.POSITIVE_INFINITY;
+      return leftPriority - rightPriority;
+    });
+  }, [stems, actionableSuggestionEntries]);
   const enabledCount = stems.filter((stem) => cleaningSettings(stem).enabled && cleaningSettings(stem).mode !== "Off").length;
   const strongCount = stems.filter((stem) => cleaningSettings(stem).enabled && cleaningSettings(stem).mode === "Strong").length;
   const cleanedCount = stems.filter((stem) => stem.cleaningResult?.status === "Completed" || stem.cleaningStatus === "Cleaned").length;
   const useCleanedCount = stems.filter((stem) => stem.cleaningSettings?.useCleanedInMix && stem.cleaningResult?.status === "Completed").length;
+  const needsCleaningCount = actionableSuggestionEntries.length;
   const staleJob = job && runningStatuses.has(job.status) && isStaleJob(job);
   const running = job && runningStatuses.has(job.status) && !staleJob;
 
@@ -182,7 +206,7 @@ export default function CleaningPage() {
         </div>
       </div>
 
-      <WorkflowGuide project={project} currentStep="cleaning" className="mt-6" />
+      <WorkflowGuide project={project} currentStep="cleaning" className="mt-6" onProjectRefresh={loadProject} />
 
       {error ? <p className="mt-5 rounded-lg border border-rose-300/20 bg-rose-400/10 px-3 py-2 text-sm text-rose-100">{error}</p> : null}
 
@@ -205,12 +229,52 @@ export default function CleaningPage() {
       ) : null}
 
       {stems.length ? (
-        <section className="mt-6 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <section className="mt-6 grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
           <CleaningStat icon={Power} label="Enabled" value={`${enabledCount}/${stems.length}`} detail="Will run in cleaning job" tone="teal" />
+          <CleaningStat
+            icon={AlertTriangle}
+            label="Needs Cleaning"
+            value={needsCleaningCount}
+            detail={needsCleaningCount ? "Suggested from stem analysis" : "No remaining flagged stems"}
+            tone={needsCleaningCount ? "amber" : "emerald"}
+          />
           <CleaningStat icon={CheckCircle2} label="Cleaned" value={`${cleanedCount}/${stems.length}`} detail="Processed versions saved" tone="emerald" />
           <CleaningStat icon={Gauge} label="Strong Mode" value={strongCount} detail="Compare before mixing" tone={strongCount ? "amber" : "zinc"} />
           <CleaningStat icon={Sparkles} label="Mix Source" value={useCleanedCount} detail="Using cleaned files" tone="cyan" />
         </section>
+      ) : null}
+
+      {actionableSuggestionEntries.length ? (
+        <section className="mt-6 overflow-hidden rounded-lg border border-amber-300/20 bg-gradient-to-br from-amber-300/10 via-white/[0.04] to-transparent">
+          <div className="flex flex-col gap-2 border-b border-white/10 px-4 py-4 xl:flex-row xl:items-end xl:justify-between">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-[0.14em] text-amber-100/80">Suggested Cleaning</p>
+              <h2 className="mt-1 text-lg font-semibold text-white">Stems That Need Cleaning</h2>
+              <p className="mt-1 max-w-3xl text-sm text-zinc-300">
+                These stems were flagged from the existing analysis warnings and measured noise floor. Apply the suggestion to stage them for the next cleaning pass.
+              </p>
+            </div>
+            <p className="text-sm text-amber-100">
+              {needsCleaningCount} stem{needsCleaningCount === 1 ? "" : "s"} still need attention.
+            </p>
+          </div>
+          <div className="divide-y divide-white/10">
+            {actionableSuggestionEntries.map(({ stem, suggestion, state }) => (
+              <SuggestedCleaningItem
+                key={stem.id}
+                stem={stem}
+                suggestion={suggestion}
+                state={state}
+                busy={busyStemId === stem.id}
+                onApply={updateStemCleaning}
+              />
+            ))}
+          </div>
+        </section>
+      ) : suggestionEntries.length ? (
+        <p className="mt-6 rounded-lg border border-emerald-300/20 bg-emerald-300/10 px-3 py-2 text-sm text-emerald-100">
+          Current analysis does not show any remaining stems that still need cleaning.
+        </p>
       ) : null}
 
       <section className="mt-6">
@@ -229,9 +293,19 @@ export default function CleaningPage() {
                   <span>Results</span>
                 </div>
                 <div className="divide-y divide-white/10">
-                  {stems.map((stem) => (
-                    <CleaningRow key={stem.id} stem={stem} busy={busyStemId === stem.id} onChange={updateStemCleaning} />
-                  ))}
+                  {displayedStems.map((stem) => {
+                    const suggestionEntry = suggestionLookup.get(stem.id);
+                    return (
+                      <CleaningRow
+                        key={stem.id}
+                        stem={stem}
+                        busy={busyStemId === stem.id}
+                        onChange={updateStemCleaning}
+                        suggestion={suggestionEntry?.suggestion || null}
+                        suggestionState={suggestionEntry?.state || ""}
+                      />
+                    );
+                  })}
                 </div>
               </div>
             </div>
@@ -273,17 +347,66 @@ function CleaningStat({ icon: Icon, label, value, detail, tone }) {
   );
 }
 
-function CleaningRow({ stem, busy, onChange }) {
+function SuggestedCleaningItem({ stem, suggestion, state, busy, onApply }) {
+  const settings = cleaningSettings(stem);
+  const applyDisabled = busy || state !== "needs-apply";
+  const stateMessage =
+    state === "needs-apply"
+      ? `Current mode: ${settings.enabled ? settings.mode : "Off"}`
+      : "Settings are already in place. Run Cleaning to render the cleaned file.";
+
+  return (
+    <div className="flex flex-col gap-3 px-4 py-4 xl:flex-row xl:items-center xl:justify-between">
+      <div className="min-w-0">
+        <div className="flex flex-wrap items-center gap-2">
+          <p className="truncate font-medium text-white">{stem.originalFilename}</p>
+          <span className="rounded-full border border-white/10 bg-white/[0.06] px-2 py-0.5 text-xs font-semibold text-zinc-300">{stem.stemType}</span>
+        </div>
+        <div className="mt-2 flex flex-wrap gap-2">
+          {suggestion.badges.map((badge) => (
+            <SuggestionBadge key={`${stem.id}-${badge.label}`} {...badge} />
+          ))}
+          <SuggestionStateBadge state={state} />
+        </div>
+        <p className="mt-2 text-sm text-zinc-300">{suggestion.summary}</p>
+      </div>
+      <div className="flex shrink-0 flex-col items-start gap-2 xl:items-end">
+        <p className="text-xs text-zinc-400">{stateMessage}</p>
+        <Button
+          type="button"
+          className="min-h-8 px-3 py-1 text-xs"
+          onClick={() => onApply(stem, suggestion.updates)}
+          disabled={applyDisabled}
+        >
+          {state === "needs-apply" ? "Apply Suggestion" : "Applied"}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+function CleaningRow({ stem, busy, onChange, suggestion, suggestionState }) {
   const settings = cleaningSettings(stem);
   const result = stem.cleaningResult || {};
   const originalUrl = mediaUrl(stem.filePath);
   const cleanedUrl = result.cleanedFileUrl || mediaUrl(result.cleanedFilePath);
   const cleanedReady = result.status === "Completed" && cleanedUrl;
+  const showSuggestion = Boolean(suggestion);
+  const suggestionActionable = suggestionState === "needs-apply";
+  const suggestionPendingRun = suggestionState === "ready-to-run";
 
   return (
-    <div className={`grid gap-4 px-4 py-4 xl:items-start xl:gap-3 ${cleaningGridColumns}`}>
+    <div className={`grid gap-4 px-4 py-4 xl:items-start xl:gap-3 ${cleaningGridColumns} ${showSuggestion && suggestionState !== "done" ? "bg-amber-300/[0.03]" : ""}`}>
       <div className="min-w-0">
         <p className="truncate font-medium text-white">{stem.originalFilename}</p>
+        {showSuggestion ? (
+          <div className="mt-2 flex flex-wrap gap-2">
+            {suggestion.badges.map((badge) => (
+              <SuggestionBadge key={`${stem.id}-row-${badge.label}`} {...badge} />
+            ))}
+            <SuggestionStateBadge state={suggestionState} />
+          </div>
+        ) : null}
         {result.error ? <p className="mt-1 line-clamp-2 text-xs text-rose-200">{result.error}</p> : null}
         {result.warnings?.length ? <p className="mt-1 line-clamp-2 text-xs text-amber-100">{result.warnings[0]}</p> : null}
       </div>
@@ -315,6 +438,21 @@ function CleaningRow({ stem, busy, onChange }) {
             </option>
           ))}
         </select>
+        {showSuggestion ? (
+          <div className="rounded-lg border border-teal-300/15 bg-teal-300/5 p-2">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-teal-100">Suggested {suggestion.mode}</p>
+            <p className="mt-1 text-xs leading-5 text-zinc-400">{suggestion.summary}</p>
+            <Button
+              type="button"
+              variant={suggestionActionable ? "primary" : "secondary"}
+              className="mt-2 min-h-8 w-full px-3 py-1 text-xs"
+              onClick={() => onChange(stem, suggestion.updates)}
+              disabled={busy || !suggestionActionable}
+            >
+              {suggestionActionable ? "Apply suggestion" : suggestionPendingRun ? "Applied" : "Done"}
+            </Button>
+          </div>
+        ) : null}
       </div>
       <div className="space-y-2">
         <p className="text-xs font-semibold uppercase tracking-[0.12em] text-zinc-500 xl:hidden">Hum</p>
@@ -439,6 +577,32 @@ function OperationList({ title, items, tone = "default" }) {
   );
 }
 
+function SuggestionBadge({ label, tone = "zinc", title }) {
+  const tones = {
+    amber: "border-amber-300/20 bg-amber-300/10 text-amber-100",
+    emerald: "border-emerald-300/20 bg-emerald-300/10 text-emerald-100",
+    rose: "border-rose-300/20 bg-rose-300/10 text-rose-100",
+    teal: "border-teal-300/20 bg-teal-300/10 text-teal-100",
+    zinc: "border-white/10 bg-white/[0.06] text-zinc-300",
+  };
+  return (
+    <span title={title || label} className={`rounded-full border px-2 py-0.5 text-xs font-semibold ${tones[tone] || tones.zinc}`}>
+      {label}
+    </span>
+  );
+}
+
+function SuggestionStateBadge({ state }) {
+  if (!state) return null;
+  const badges = {
+    "needs-apply": { label: "Apply Needed", tone: "amber" },
+    "ready-to-run": { label: "Ready To Run", tone: "teal" },
+    done: { label: "Already Covered", tone: "emerald" },
+  };
+  const badge = badges[state];
+  return badge ? <SuggestionBadge {...badge} /> : null;
+}
+
 function fallbackCleanedMetrics(result) {
   if (!result) return null;
   return {
@@ -467,6 +631,102 @@ function cleaningSettings(stem) {
     useCleanedInMix: true,
     ...(stem.cleaningSettings || {}),
   };
+}
+
+function getCleaningSuggestion(stem) {
+  const analysis = stem.analysisResult || {};
+  const warnings = Array.isArray(analysis.warnings) ? analysis.warnings : [];
+  const warningText = warnings.join(" ").toLowerCase();
+  const noiseFloor = analysis.noiseFloorDbfs;
+  const sensitiveStem = isNoiseSensitiveStem(stem.stemType);
+  const noisyWarning = warningText.includes("consider cleaning") || warningText.includes("noisy");
+  const humWarning = warningText.includes("hum") || warningText.includes("buzz") || warningText.includes("mains");
+
+  let mode = "Off";
+  let headline = "";
+  let summary = "";
+
+  if (Number.isFinite(noiseFloor) && noiseFloor > -32) {
+    mode = "Strong";
+    headline = "Heavy noise";
+    summary = `Noise floor is ${formatDb(noiseFloor)}. Strong cleaning is recommended before mixing.`;
+  } else if (noisyWarning || (Number.isFinite(noiseFloor) && noiseFloor > -38)) {
+    mode = sensitiveStem && Number.isFinite(noiseFloor) && noiseFloor > -34 ? "Strong" : "Medium";
+    headline = "Noise flagged";
+    summary = Number.isFinite(noiseFloor)
+      ? `Analysis flagged this stem at ${formatDb(noiseFloor)}. ${mode} cleaning should keep that noise from carrying into the mix.`
+      : `${mode} cleaning is recommended from the current analysis warnings.`;
+  } else if (sensitiveStem && Number.isFinite(noiseFloor) && noiseFloor > -45) {
+    mode = "Light";
+    headline = "Light cleanup";
+    summary = `Noise floor is ${formatDb(noiseFloor)} on a detail-sensitive stem. Light cleaning should tidy it without over-processing.`;
+  } else if (humWarning) {
+    mode = "Light";
+    headline = "Hum control";
+    summary = "Analysis hints at electrical hum or buzz. Start with Light cleaning and hum reduction.";
+  } else {
+    return null;
+  }
+
+  const badges = [
+    { label: headline, tone: mode === "Strong" ? "rose" : "amber" },
+    { label: `Suggest ${mode}`, tone: "teal" },
+  ];
+  if (Number.isFinite(noiseFloor)) {
+    badges.push({ label: `Noise ${formatDb(noiseFloor)}`, tone: "zinc", title: `Measured noise floor: ${formatDb(noiseFloor)}` });
+  }
+  if (humWarning) {
+    badges.push({ label: "Hum 60 Hz", tone: "amber", title: "Hum reduction suggested from analysis warnings." });
+  }
+
+  return {
+    mode,
+    summary,
+    badges,
+    priority: cleaningModeRank(mode),
+    updates: {
+      enabled: true,
+      mode,
+      ...(humWarning ? { humRemoval: true, humFrequency: 60 } : {}),
+    },
+  };
+}
+
+function getCleaningSuggestionState(stem, suggestion) {
+  if (!satisfiesCleaningSuggestion(cleaningSettings(stem), suggestion)) return "needs-apply";
+  return stem.cleaningResult?.status === "Completed" ? "done" : "ready-to-run";
+}
+
+function satisfiesCleaningSuggestion(settings, suggestion) {
+  if (!settings.enabled) return false;
+  if (cleaningModeRank(settings.mode) < cleaningModeRank(suggestion.mode)) return false;
+  if (suggestion.updates.humRemoval && !settings.humRemoval) return false;
+  if (suggestion.updates.humRemoval && Number(settings.humFrequency) !== Number(suggestion.updates.humFrequency || 60)) return false;
+  return true;
+}
+
+function compareSuggestionEntries(left, right) {
+  const stateDelta = suggestionStateRank(left.state) - suggestionStateRank(right.state);
+  if (stateDelta !== 0) return stateDelta;
+  const priorityDelta = (right.suggestion.priority || 0) - (left.suggestion.priority || 0);
+  if (priorityDelta !== 0) return priorityDelta;
+  return `${left.stem.originalFilename || ""}`.localeCompare(`${right.stem.originalFilename || ""}`);
+}
+
+function suggestionStateRank(state) {
+  if (state === "needs-apply") return 0;
+  if (state === "ready-to-run") return 1;
+  return 2;
+}
+
+function cleaningModeRank(mode) {
+  const ranks = { Off: 0, Light: 1, Medium: 2, Strong: 3 };
+  return ranks[mode] || 0;
+}
+
+function isNoiseSensitiveStem(stemType) {
+  const value = `${stemType || ""}`.toLowerCase();
+  return value.includes("vocal") || value.includes("acoustic") || value.includes("piano") || value.includes("strings");
 }
 
 function mediaUrl(path) {

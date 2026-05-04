@@ -10,7 +10,7 @@ from fastapi import HTTPException
 from .audio_engine import ensure_audio_environment, generate_advanced_mix
 from .logging_utils import append_project_log, utc_now_iso
 from .models import MixVersion, ProcessingJob, Project, UpdateMixControlsRequest, UpdateMixVersionRequest
-from .phase2 import _ensure_mix_setting, _mix_source_path
+from .phase2 import _clear_rough_mix_reference, _ensure_mix_setting, _mix_source_path
 from .stem_detection import effective_stem_type
 from .storage import display_path, ensure_project_dirs, project_subdirs, resolve_stored_file_path, store, _find_project
 
@@ -21,43 +21,51 @@ MIX_PRESETS: dict[str, dict[str, Any]] = {
         "targetLufsRecommendation": -16.0,
         "controls": {
             "preset": "Balanced",
-            "vocalBoost": 1.5,
-            "vocalBusLevel": 0,
-            "vocalGlueAmount": 45,
-            "vocalDelayAmount": 25,
-            "backingVocalWidth": 60,
+            "vocalBoost": 2.0,
+            "vocalBusLevel": 0.4,
+            "vocalGlueAmount": 22,
+            "vocalDelayAmount": 4,
+            "backingVocalWidth": 55,
             "drumPunch": 50,
             "bassWeight": 50,
             "brightness": 0,
             "warmth": 0,
             "width": 55,
-            "reverbAmount": 35,
-            "vocalReverbAmount": 35,
-            "roomSize": 45,
+            "reverbAmount": 24,
+            "vocalReverbAmount": 14,
+            "roomSize": 38,
         },
-        "roleGains": {"Lead Vocal": 0.4, "Backing Vocal": -1.2, "Pads/Strings": -1.2, "FX/Ambience": -1.8},
+        "roleGains": {
+            "Lead Vocal": 0.8,
+            "Backing Vocal": -1.4,
+            "Electric Guitar": -0.4,
+            "Acoustic Guitar": -0.3,
+            "Keys/Piano": -0.5,
+            "Pads/Strings": -1.5,
+            "FX/Ambience": -2.0,
+        },
     },
     "Vocal Forward": {
         "description": "Keeps the lead vocal clearly in front with support instruments tucked under it.",
         "targetLufsRecommendation": -15.5,
         "controls": {
             "preset": "Vocal Forward",
-            "vocalBoost": 2.8,
-            "vocalBusLevel": 0.6,
-            "vocalGlueAmount": 58,
-            "vocalDelayAmount": 28,
+            "vocalBoost": 3.0,
+            "vocalBusLevel": 0.8,
+            "vocalGlueAmount": 44,
+            "vocalDelayAmount": 12,
             "backingVocalWidth": 62,
             "drumPunch": 45,
             "bassWeight": 45,
             "brightness": 8,
             "warmth": 0,
             "width": 52,
-            "reverbAmount": 32,
-            "vocalReverbAmount": 38,
+            "reverbAmount": 28,
+            "vocalReverbAmount": 22,
             "roomSize": 42,
         },
         "roleGains": {
-            "Lead Vocal": 1.2,
+            "Lead Vocal": 1.4,
             "Backing Vocal": -1.8,
             "Electric Guitar": -1.2,
             "Acoustic Guitar": -0.8,
@@ -324,33 +332,28 @@ def reset_advanced_mix(project_id: str) -> Project:
     if preset_name not in MIX_PRESETS:
         preset_name = "Balanced"
     controls.update(deepcopy(MIX_PRESETS[preset_name]["controls"]))
-
-    type_counters: dict[str, int] = {}
-    for stem in project.get("stems", []):
-        stem_type = effective_stem_type(stem)
-        type_counters[stem_type] = type_counters.get(stem_type, 0) + 1
-        setting = _ensure_mix_setting(project, stem["id"])
-        suggestion = stem.get("autoBalanceSuggestion")
-        if suggestion:
-            setting["gainDb"] = suggestion.get("suggestedGainDb", 0)
-            setting["pan"] = suggestion.get("suggestedPan", 0)
-            setting["autoBalanceApplied"] = True
-        else:
-            setting["gainDb"] = 0
-            setting["pan"] = _phase5_default_pan(stem_type, type_counters[stem_type])
-            setting["autoBalanceApplied"] = False
-        stem_defaults = _default_stem_processing(stem_type)
-        setting["processingChainEnabled"] = True
-        setting["reverbSend"] = stem_defaults["reverbSend"]
-        setting["delaySend"] = stem_defaults["delaySend"]
-        setting["presenceAmount"] = stem_defaults["presenceAmount"]
-        setting["compressionAmount"] = stem_defaults["compressionAmount"]
+    _reset_stem_processing_settings(project)
+    _clear_rough_mix_reference(project)
 
     now = utc_now_iso()
     project["mixSettings"]["updatedAt"] = now
     project["updatedAt"] = now
     store.save(data)
     append_project_log(project_subdirs(project_id)["logs"], "Reset advanced mixer settings to the current auto mix preset.")
+    return Project(**project)
+
+
+def reset_stem_processing(project_id: str) -> Project:
+    data = store.load()
+    project = _find_project(data, project_id)
+    _reset_stem_processing_settings(project)
+    _clear_rough_mix_reference(project)
+
+    now = utc_now_iso()
+    project["mixSettings"]["updatedAt"] = now
+    project["updatedAt"] = now
+    store.save(data)
+    append_project_log(project_subdirs(project_id)["logs"], "Reset stem processing settings to the current auto mix defaults.")
     return Project(**project)
 
 
@@ -644,8 +647,8 @@ def _source_kind_and_path(stem: dict[str, Any], selected_path: Path) -> tuple[st
 
 def _default_stem_processing(stem_type: str) -> dict[str, float]:
     return {
-        "Lead Vocal": {"reverbSend": 38, "delaySend": 24, "presenceAmount": 12, "compressionAmount": 72},
-        "Backing Vocal": {"reverbSend": 58, "delaySend": 14, "presenceAmount": 4, "compressionAmount": 64},
+        "Lead Vocal": {"reverbSend": 18, "delaySend": 4, "presenceAmount": 12, "compressionAmount": 52},
+        "Backing Vocal": {"reverbSend": 34, "delaySend": 4, "presenceAmount": 0, "compressionAmount": 48},
         "Drums": {"reverbSend": 18, "delaySend": 0, "presenceAmount": 4, "compressionAmount": 46},
         "Kick": {"reverbSend": 4, "delaySend": 0, "presenceAmount": 0, "compressionAmount": 58},
         "Snare": {"reverbSend": 26, "delaySend": 0, "presenceAmount": 8, "compressionAmount": 50},
@@ -656,6 +659,31 @@ def _default_stem_processing(stem_type: str) -> dict[str, float]:
         "Pads/Strings": {"reverbSend": 62, "delaySend": 4, "presenceAmount": -6, "compressionAmount": 12},
         "FX/Ambience": {"reverbSend": 70, "delaySend": 10, "presenceAmount": -4, "compressionAmount": 6},
     }.get(stem_type, {"reverbSend": 30, "delaySend": 0, "presenceAmount": 0, "compressionAmount": 32})
+
+
+def _reset_stem_processing_settings(project: dict[str, Any]) -> None:
+    type_counters: dict[str, int] = {}
+    for stem in project.get("stems", []):
+        stem_type = effective_stem_type(stem)
+        type_counters[stem_type] = type_counters.get(stem_type, 0) + 1
+        setting = _ensure_mix_setting(project, stem["id"])
+        suggestion = stem.get("autoBalanceSuggestion")
+        if suggestion:
+            setting["gainDb"] = suggestion.get("suggestedGainDb", 0)
+            setting["pan"] = suggestion.get("suggestedPan", 0)
+            setting["autoBalanceApplied"] = True
+        else:
+            setting["gainDb"] = 0
+            setting["pan"] = _phase5_default_pan(stem_type, type_counters[stem_type])
+            setting["autoBalanceApplied"] = False
+        stem_defaults = _default_stem_processing(stem_type)
+        setting["mute"] = False
+        setting["solo"] = False
+        setting["processingChainEnabled"] = True
+        setting["reverbSend"] = stem_defaults["reverbSend"]
+        setting["delaySend"] = stem_defaults["delaySend"]
+        setting["presenceAmount"] = stem_defaults["presenceAmount"]
+        setting["compressionAmount"] = stem_defaults["compressionAmount"]
 
 
 def _phase5_default_pan(stem_type: str, type_index: int) -> float:

@@ -108,6 +108,11 @@ try:
 except Exception:  # Optional Phase 5 dependency; scipy/native fallback remains available.
     pedalboard_lib = None
 
+try:
+    import sounddevice as sounddevice_lib  # noqa: F401
+except Exception:  # Optional direct-recording dependency; upload workflows still work without it.
+    sounddevice_lib = None
+
 
 def check_audio_environment() -> dict[str, Any]:
     checks: dict[str, Any] = {
@@ -147,6 +152,10 @@ def check_audio_environment() -> dict[str, Any]:
     checks["optionalPackages"]["pedalboard"] = {
         "ok": pedalboard_lib is not None,
         "version": getattr(pedalboard_lib, "__version__", None) if pedalboard_lib else None,
+    }
+    checks["optionalPackages"]["sounddevice"] = {
+        "ok": sounddevice_lib is not None,
+        "version": getattr(sounddevice_lib, "__version__", None) if sounddevice_lib else None,
     }
     checks["ok"] = bool(checks["ffmpeg"]["ok"]) and all(item["ok"] for item in checks["pythonPackages"].values())
     return checks
@@ -301,14 +310,14 @@ def enhance_vocal_file(
     pitch_correction: str,
     key: str = "Auto",
     scale: str = "Major",
-    fx_style: str = "Natural Plate",
-    fx_amount: float = 25,
+    fx_style: str = "Dry",
+    fx_amount: float = 0,
     body_amount: float = 0,
     presence_amount: float = 0,
     air_amount: float = 0,
     de_ess_amount: float = 50,
-    compression_amount: float = 50,
-    rider_amount: float = 50,
+    compression_amount: float = 45,
+    rider_amount: float = 45,
     saturation_amount: float = 50,
     doubler_amount: float = 50,
     breath_reduction_amount: float = 35,
@@ -703,7 +712,7 @@ def generate_advanced_mix(stem_inputs: list[dict], output_dir: Path, version_num
                     "sourceKind": item.get("sourceKind", "Original"),
                     "gainDb": _round(float(item.get("gainDb", 0))),
                     "pan": _round(float(item.get("pan", 0))),
-                    "processingChainEnabled": bool(item.get("processingChainEnabled", True)),
+                    "processingChainEnabled": bool(item.get("processingChainEnabled", True)) and not _should_bypass_vocal_channel_strip(item),
                     "reverbSend": _round(float(item.get("reverbSend", 35))),
                     "delaySend": _round(float(item.get("delaySend", 0))),
                     "presenceAmount": _round(float(item.get("presenceAmount", 0))),
@@ -735,7 +744,7 @@ def generate_advanced_mix(stem_inputs: list[dict], output_dir: Path, version_num
         _progress(progress_callback, 0.55 + ((index - 1) / len(processed_tracks)) * 0.18, f"Summing {item.get('filename', 'stem')}")
         stem_type = item.get("stemType", "Unknown")
         if stem_type in {"Electric Guitar", "Acoustic Guitar", "Keys/Piano", "Pads/Strings", "FX/Ambience"} and np.any(vocal_focus_bus):
-            duck_amount = 0.7 + max(0.0, float(controls.get("vocalBoost", 0))) * 0.18
+            duck_amount = 0.95 + max(0.0, float(controls.get("vocalBoost", 0))) * 0.22
             dry = _apply_vocal_ducking(dry, vocal_focus_bus[: dry.shape[0]], ROUGH_MIX_SAMPLE_RATE, duck_amount)
             send = _apply_vocal_ducking(send, vocal_focus_bus[: send.shape[0]], ROUGH_MIX_SAMPLE_RATE, duck_amount * 0.55)
         if stem_type in {"Lead Vocal", "Backing Vocal"}:
@@ -823,6 +832,16 @@ def master_audio_file(input_path: Path, output_path: Path, output_format: str, c
     operations: list[str] = []
     warnings: list[str] = []
     errors: list[str] = []
+
+    try:
+        trim_start_seconds = float(controls.get("trimStartSeconds", 0) or 0)
+        trim_end_seconds = float(controls.get("trimEndSeconds", 0) or 0)
+        if trim_start_seconds > 0 or trim_end_seconds > 0:
+            _progress(progress_callback, 0.18, "Applying crop")
+            audio, trim_operations = _apply_time_trim(audio, decoded.sample_rate, trim_start_seconds, trim_end_seconds)
+            operations.extend(trim_operations)
+    except Exception as exc:
+        raise ValueError(str(exc) or "Crop failed.") from exc
 
     _progress(progress_callback, 0.22, "Measuring input loudness")
     input_metrics = _analyze_samples(audio, decoded.sample_rate)
@@ -930,15 +949,57 @@ def master_audio_file(input_path: Path, output_path: Path, output_format: str, c
     )
 
 
-def export_audio_file(input_path: Path, output_path: Path, output_format: str) -> dict:
+def export_audio_file(input_path: Path, output_path: Path, output_format: str, trim_start_seconds: float = 0.0, trim_end_seconds: float = 0.0) -> dict:
     ensure_audio_environment()
     info = _probe_audio(input_path)
     decoded = _decode_audio(input_path, sample_rate=info["sampleRate"], channels=info["channels"])
+    audio = decoded.samples.astype(np.float32, copy=True)
+    operations: list[str] = []
+    if trim_start_seconds > 0 or trim_end_seconds > 0:
+        audio, operations = _apply_time_trim(audio, decoded.sample_rate, trim_start_seconds, trim_end_seconds)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    _encode_float_audio(decoded.samples.astype(np.float32, copy=False), output_path, codec_args=_codec_args_for_format(output_format), sample_rate=decoded.sample_rate)
-    metrics = _analyze_samples(decoded.samples, decoded.sample_rate)
-    metrics["dynamicRangeDb"] = _dynamic_range_estimate(decoded.samples, decoded.sample_rate)
+    _encode_float_audio(audio.astype(np.float32, copy=False), output_path, codec_args=_codec_args_for_format(output_format), sample_rate=decoded.sample_rate)
+    metrics = _analyze_samples(audio, decoded.sample_rate)
+    metrics["dynamicRangeDb"] = _dynamic_range_estimate(audio, decoded.sample_rate)
+    metrics["operations"] = operations
     return metrics
+
+
+def _apply_time_trim(audio: np.ndarray, sample_rate: int, trim_start_seconds: float = 0.0, trim_end_seconds: float = 0.0) -> tuple[np.ndarray, list[str]]:
+    start_seconds = max(0.0, float(trim_start_seconds or 0.0))
+    end_seconds = max(0.0, float(trim_end_seconds or 0.0))
+    if start_seconds <= 0.0 and end_seconds <= 0.0:
+        return audio, []
+
+    total_frames = int(audio.shape[0]) if audio.ndim > 1 else int(audio.size)
+    if total_frames <= 0:
+        raise ValueError("Selected mix contains no audio samples to crop.")
+
+    start_frames = int(round(start_seconds * sample_rate))
+    end_frames = int(round(end_seconds * sample_rate))
+    if start_frames >= total_frames:
+        raise ValueError("Crop start removes the entire song.")
+
+    end_index = total_frames - end_frames if end_frames > 0 else total_frames
+    if end_index <= start_frames:
+        raise ValueError("Crop settings remove the entire song.")
+
+    remaining_seconds = (end_index - start_frames) / max(1, sample_rate)
+    if remaining_seconds < 0.5:
+        raise ValueError("Crop settings leave less than 0.5 seconds of audio.")
+
+    trimmed = audio[start_frames:end_index].copy()
+    operations: list[str] = []
+    if start_frames > 0:
+        operations.append(f"cropped {_format_seconds_label(start_seconds)} from intro")
+    if end_frames > 0:
+        operations.append(f"cropped {_format_seconds_label(end_seconds)} from outro")
+    return trimmed, operations
+
+
+def _format_seconds_label(value: float) -> str:
+    formatted = f"{max(0.0, float(value)):.2f}".rstrip("0").rstrip(".")
+    return f"{formatted or '0'}s"
 
 
 def _probe_audio(path: Path) -> dict[str, int]:
@@ -1345,10 +1406,11 @@ def _dynamic_range_estimate(audio: np.ndarray, sample_rate: int) -> float | None
 def _process_advanced_stem(audio: np.ndarray, sample_rate: int, item: dict, controls: dict, warnings: list[str]) -> tuple[np.ndarray, np.ndarray]:
     stem_type = item.get("stemType", "Unknown")
     processing_enabled = bool(item.get("processingChainEnabled", True))
+    vocal_channel_strip_enabled = processing_enabled and not _should_bypass_vocal_channel_strip(item)
     compression_amount = max(0.0, min(1.0, float(item.get("compressionAmount", 50)) / 100.0))
     dry = audio.astype(np.float32, copy=True)
 
-    if processing_enabled:
+    if vocal_channel_strip_enabled:
         for label, processor in _advanced_chain(stem_type, sample_rate, controls, compression_amount):
             try:
                 dry = processor(dry)
@@ -1371,6 +1433,12 @@ def _process_advanced_stem(audio: np.ndarray, sample_rate: int, item: dict, cont
     dry = np.clip(dry, -1.2, 1.2).astype(np.float32, copy=False)
     send = np.clip(send, -1.0, 1.0).astype(np.float32, copy=False)
     return dry, send
+
+
+def _should_bypass_vocal_channel_strip(item: dict) -> bool:
+    # Enhanced vocals already have their own shaping, so re-running the mix strip
+    # tends to over-compress and over-brighten them.
+    return item.get("sourceKind") == "Enhanced Vocal" and item.get("stemType") in {"Lead Vocal", "Backing Vocal"}
 
 
 def _advanced_chain(stem_type: str, sample_rate: int, controls: dict, compression_amount: float) -> list[tuple[str, Any]]:
@@ -1837,10 +1905,10 @@ def _process_vocal_mix_bus(audio: np.ndarray, sample_rate: int, controls: dict, 
     vocal_bus = audio.astype(np.float32, copy=True)
     glue = _control_ratio(controls, "vocalGlueAmount")
     if glue > 0.01:
-        vocal_bus = _compress_audio(vocal_bus, threshold_db=-21.5 + (0.5 - glue) * 4.0, ratio=1.6 + glue * 2.4, mix=0.16 + glue * 0.44)
+        vocal_bus = _compress_audio(vocal_bus, threshold_db=-21.5 + (0.5 - glue) * 4.0, ratio=1.5 + glue * 2.0, mix=0.12 + glue * 0.30)
     delay_amount = _control_ratio(controls, "vocalDelayAmount")
     if delay_amount > 0.01:
-        vocal_bus = vocal_bus + _delay_effect(vocal_bus, sample_rate, delay_seconds=0.285, feedback=0.20 + delay_amount * 0.14, amount=0.045 + delay_amount * 0.085)
+        vocal_bus = vocal_bus + _delay_effect(vocal_bus, sample_rate, delay_seconds=0.285, feedback=0.18 + delay_amount * 0.12, amount=0.02 + delay_amount * 0.055)
     level = float(controls.get("vocalBusLevel", 0))
     if abs(level) > 0.01:
         vocal_bus = _apply_gain(vocal_bus, level)
@@ -1856,8 +1924,8 @@ def _stem_reverb_amount(stem_type: str, reverb_send: float, controls: dict) -> f
     global_amount = _control_ratio(controls, "reverbAmount")
     vocal_amount = _control_ratio(controls, "vocalReverbAmount")
     type_factor = {
-        "Lead Vocal": 0.55 + vocal_amount * 0.4,
-        "Backing Vocal": 0.78 + vocal_amount * 0.25,
+        "Lead Vocal": 0.42 + vocal_amount * 0.22,
+        "Backing Vocal": 0.62 + vocal_amount * 0.16,
         "Drums": 0.32,
         "Kick": 0.04,
         "Snare": 0.36,
@@ -1879,8 +1947,8 @@ def _stem_delay_amount(stem_type: str, delay_send: float, controls: dict) -> flo
     vocal_amount = _control_ratio(controls, "vocalReverbAmount")
     vocal_delay = _control_ratio(controls, "vocalDelayAmount")
     type_factor = {
-        "Lead Vocal": 0.05 + vocal_amount * 0.05 + vocal_delay * 0.08,
-        "Backing Vocal": 0.04 + vocal_amount * 0.04 + vocal_delay * 0.07,
+        "Lead Vocal": 0.025 + vocal_amount * 0.025 + vocal_delay * 0.05,
+        "Backing Vocal": 0.02 + vocal_amount * 0.02 + vocal_delay * 0.04,
         "Electric Guitar": 0.035,
         "Acoustic Guitar": 0.03,
         "Keys/Piano": 0.025,

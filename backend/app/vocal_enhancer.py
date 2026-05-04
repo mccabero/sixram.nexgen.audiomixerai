@@ -39,8 +39,8 @@ VOCAL_CONTROL_DEFAULTS = {
     "presenceAmount": 0,
     "airAmount": 0,
     "deEssAmount": 50,
-    "compressionAmount": 50,
-    "riderAmount": 50,
+    "compressionAmount": 45,
+    "riderAmount": 45,
     "saturationAmount": 50,
     "doublerAmount": 50,
     "breathReductionAmount": 35,
@@ -542,14 +542,14 @@ def _run_vocal_enhancement_job(project_id: str, job_id: str) -> None:
                 "pitchCorrection": settings.get("pitchCorrection", "Off"),
                 "key": settings.get("key", "Auto"),
                 "scale": settings.get("scale", "Major"),
-                "fxStyle": settings.get("fxStyle", "Natural Plate"),
-                "fxAmount": float(settings.get("fxAmount", 25)),
+                "fxStyle": settings.get("fxStyle", "Dry"),
+                "fxAmount": float(settings.get("fxAmount", 0)),
                 "bodyAmount": float(settings.get("bodyAmount", 0)),
                 "presenceAmount": float(settings.get("presenceAmount", 0)),
                 "airAmount": float(settings.get("airAmount", 0)),
                 "deEssAmount": float(settings.get("deEssAmount", 50)),
-                "compressionAmount": float(settings.get("compressionAmount", 50)),
-                "riderAmount": float(settings.get("riderAmount", 50)),
+                "compressionAmount": float(settings.get("compressionAmount", 45)),
+                "riderAmount": float(settings.get("riderAmount", 45)),
                 "saturationAmount": float(settings.get("saturationAmount", 50)),
                 "doublerAmount": float(settings.get("doublerAmount", 50)),
                 "breathReductionAmount": float(settings.get("breathReductionAmount", 35)),
@@ -682,14 +682,14 @@ def _build_vocal_recommendation(stem: dict[str, Any], profile: dict[str, Any], s
         "pitchCorrection": "Off",
         "key": estimated_key if key_confidence >= 55 else "Auto",
         "scale": estimated_scale if key_confidence >= 55 else "Major",
-        "fxStyle": "Natural Plate",
-        "fxAmount": 28 if is_backing else 22,
+        "fxStyle": "Dry",
+        "fxAmount": 0,
         "bodyAmount": 0,
         "presenceAmount": 0,
         "airAmount": 0,
         "deEssAmount": 50,
-        "compressionAmount": 55,
-        "riderAmount": 55,
+        "compressionAmount": 50,
+        "riderAmount": 48,
         "saturationAmount": 45,
         "doublerAmount": 68 if is_backing else 35,
         "breathReductionAmount": 44 if is_backing else 38,
@@ -703,7 +703,6 @@ def _build_vocal_recommendation(stem: dict[str, Any], profile: dict[str, Any], s
         recommended["preset"] = "Pop Vocal"
     if {"Noise", "Hiss", "Low Rumble"} & issue_types:
         recommended["preset"] = "Live Vocal Fix"
-        recommended["fxAmount"] = 18
         recommended["saturationAmount"] = 35
     elif {"Dull", "Thin"} & issue_types and not is_backing:
         recommended["preset"] = "Bright AI Polish"
@@ -855,19 +854,19 @@ def _build_vocal_quality_doctor(stem: dict[str, Any], project: dict[str, Any], p
 
     if source_peak > -0.6 or profile.get("clippingDetected"):
         add_problem("Clipped Source", "High", "The vocal source is close to clipping; aggressive compression, saturation, or air boosts can make distortion more obvious.", 14)
-        recommended["compressionAmount"] = min(float(settings.get("compressionAmount", 50)), 58)
+        recommended["compressionAmount"] = min(float(settings.get("compressionAmount", 45)), 58)
         recommended["saturationAmount"] = min(float(settings.get("saturationAmount", 50)), 34)
     if source_lufs > -12:
         add_problem("Too Hot", "Medium", "The vocal is already loud, so extra compression can flatten it.", 8)
-        recommended["compressionAmount"] = min(float(settings.get("compressionAmount", 50)), 58)
-        recommended["riderAmount"] = min(float(settings.get("riderAmount", 50)), 62)
+        recommended["compressionAmount"] = min(float(settings.get("compressionAmount", 45)), 58)
+        recommended["riderAmount"] = min(float(settings.get("riderAmount", 45)), 62)
     if source_lufs < -30:
         add_problem("Too Quiet", "Medium", "The vocal is low before processing and may fall behind the band.", 8)
-        recommended["compressionAmount"] = max(float(settings.get("compressionAmount", 50)), 68)
-        recommended["riderAmount"] = max(float(settings.get("riderAmount", 50)), 74)
+        recommended["compressionAmount"] = max(float(settings.get("compressionAmount", 45)), 68)
+        recommended["riderAmount"] = max(float(settings.get("riderAmount", 45)), 74)
     if noise_floor > -45 or flatness > 0.09:
         add_problem("Noisy", "High", "Noise or hiss is elevated; bright effects can exaggerate it.", 13)
-        recommended.update({"preset": "Live Vocal Fix", "fxAmount": min(float(settings.get("fxAmount", 25)), 18), "saturationAmount": min(float(settings.get("saturationAmount", 50)), 36)})
+        recommended.update({"preset": "Live Vocal Fix", "fxAmount": min(float(settings.get("fxAmount", 0)), 18), "saturationAmount": min(float(settings.get("saturationAmount", 50)), 36)})
     if silence > 55:
         add_problem("Long Silence", "Low", "The file contains a lot of silence; keep alignment, but check that the vocal sections are actually present.", 4)
 
@@ -896,17 +895,22 @@ def _build_vocal_quality_doctor(stem: dict[str, Any], project: dict[str, Any], p
     if settings.get("pitchCorrection") == "Strong":
         add_problem("Heavy Pitch", "Medium", "Strong pitch polish can sound artificial on live or expressive vocals.", 8)
         recommended.update({"pitchCorrection": "Natural", "pitchStrength": 42, "pitchHumanize": 82})
+    if settings.get("fxStyle") != "Dry" and float(settings.get("fxAmount", 0)) > 0:
+        add_problem("Printed FX", "Medium", "This enhanced vocal already prints ambience, and the mixer adds space again, so the vocal can lose focus.", 7)
+        recommended["fxStyle"] = "Dry"
+        recommended["fxAmount"] = 0
     if not is_backing and float(settings.get("doublerAmount", 50)) > 35:
         add_problem("Lead Too Wide", "Medium", "The lead vocal doubler is high; this can pull the lead away from the center.", 8)
         recommended["doublerAmount"] = 18
-    if float(settings.get("fxAmount", 25)) > 48:
+    if float(settings.get("fxAmount", 0)) > 48:
         add_problem("Too Wet", "Medium", "Vocal FX amount is high and may blur words in the mix.", 8)
-        recommended["fxAmount"] = 28 if not is_backing else 36
+        recommended["fxStyle"] = "Dry"
+        recommended["fxAmount"] = 0
     if settings.get("fxStyle") == "Worship Wide" and not is_backing:
         add_problem("Wide Lead FX", "Medium", "Worship Wide is lush, but it can push a lead vocal behind the band.", 7)
-        recommended["fxStyle"] = "Natural Plate"
-        recommended["fxAmount"] = min(float(recommended.get("fxAmount", settings.get("fxAmount", 25))), 30)
-    if float(settings.get("compressionAmount", 50)) > 82:
+        recommended["fxStyle"] = "Dry"
+        recommended["fxAmount"] = 0
+    if float(settings.get("compressionAmount", 45)) > 82:
         add_problem("Overcompressed", "Medium", "Very high vocal compression can reduce emotion and add pumping.", 7)
         recommended["compressionAmount"] = 66
     if float(settings.get("airAmount", 0)) > 32 and sibilance > 0.1:
@@ -1025,14 +1029,14 @@ def _ensure_vocal_settings(stem: dict[str, Any]) -> dict[str, Any]:
             "pitchCorrection": "Off",
             "key": "Auto",
             "scale": "Major",
-            "fxStyle": "Natural Plate",
-            "fxAmount": 25,
+            "fxStyle": "Dry",
+            "fxAmount": 0,
             "bodyAmount": 0,
             "presenceAmount": 0,
             "airAmount": 0,
             "deEssAmount": 50,
-            "compressionAmount": 50,
-            "riderAmount": 50,
+            "compressionAmount": 45,
+            "riderAmount": 45,
             "saturationAmount": 50,
             "doublerAmount": 50,
             "breathReductionAmount": 35,
@@ -1047,14 +1051,14 @@ def _ensure_vocal_settings(stem: dict[str, Any]) -> dict[str, Any]:
     settings.setdefault("pitchCorrection", "Off")
     settings.setdefault("key", "Auto")
     settings.setdefault("scale", "Major")
-    settings.setdefault("fxStyle", "Natural Plate")
-    settings.setdefault("fxAmount", 25)
+    settings.setdefault("fxStyle", "Dry")
+    settings.setdefault("fxAmount", 0)
     settings.setdefault("bodyAmount", 0)
     settings.setdefault("presenceAmount", 0)
     settings.setdefault("airAmount", 0)
     settings.setdefault("deEssAmount", 50)
-    settings.setdefault("compressionAmount", 50)
-    settings.setdefault("riderAmount", 50)
+    settings.setdefault("compressionAmount", 45)
+    settings.setdefault("riderAmount", 45)
     settings.setdefault("saturationAmount", 50)
     settings.setdefault("doublerAmount", 50)
     settings.setdefault("breathReductionAmount", 35)
@@ -1076,8 +1080,8 @@ def _enhancement_result_matches(stem: dict[str, Any], settings: dict[str, Any]) 
         and result.get("pitchCorrection") == settings.get("pitchCorrection")
         and result.get("key") == settings.get("key")
         and result.get("scale") == settings.get("scale")
-        and result.get("fxStyle", "Natural Plate") == settings.get("fxStyle")
-        and float(result.get("fxAmount", 25)) == float(settings.get("fxAmount", 25))
+        and result.get("fxStyle", "Dry") == settings.get("fxStyle")
+        and float(result.get("fxAmount", 0)) == float(settings.get("fxAmount", 0))
         and _control_result_matches(result, settings)
         and bool(result.get("enhancedFilePath"))
     )

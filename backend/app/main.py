@@ -5,8 +5,10 @@ from fastapi.staticfiles import StaticFiles
 from .audio_engine import check_audio_environment
 from .config import MAX_UPLOAD_MB, STEM_TYPES, STORAGE_ROOT
 from .models import (
+    AudioInputDeviceListResponse,
     CreateProjectRequest,
     CreateVocalPresetRequest,
+    DirectRecordingStatus,
     ExportFile,
     ExportMixRequest,
     GenerateMasterRequest,
@@ -17,7 +19,9 @@ from .models import (
     ProjectBackupRequest,
     ProjectListItem,
     RoughMixResponse,
+    StartDirectRecordingRequest,
     Stem,
+    StopDirectRecordingResponse,
     UpdateCleaningSettingsRequest,
     UpdateMixControlsRequest,
     UpdateMixStemRequest,
@@ -59,6 +63,7 @@ from .phase5 import (
     generate_advanced_mix_preview,
     get_mix_presets,
     reset_advanced_mix,
+    reset_stem_processing,
     run_advanced_mix_job,
     update_mix_controls,
     update_mix_version,
@@ -82,6 +87,7 @@ from .stem_detection import (
     learn_stem_type_correction,
 )
 from .storage import abandon_processing_job, create_project, delete_project, delete_stem, get_project, list_projects, mark_interrupted_jobs, read_project_logs, save_uploaded_stems, update_project, update_stem_type
+from .recording import recording_manager
 from .workflow_reset import (
     delete_analysis_results,
     delete_auto_balance,
@@ -161,6 +167,11 @@ def api_list_projects() -> list[ProjectListItem]:
     return list_projects()
 
 
+@app.get("/api/audio-input-devices", response_model=AudioInputDeviceListResponse)
+def api_list_audio_input_devices() -> AudioInputDeviceListResponse:
+    return AudioInputDeviceListResponse(devices=recording_manager.list_devices())
+
+
 @app.post("/api/projects", response_model=Project)
 def api_create_project(payload: CreateProjectRequest) -> Project:
     return create_project(payload)
@@ -190,6 +201,21 @@ def api_delete_project(project_id: str) -> dict[str, str]:
 async def api_upload_stems(project_id: str, files: list[UploadFile] = File(...)) -> UploadResponse:
     uploaded, errors = await save_uploaded_stems(project_id, files)
     return UploadResponse(uploaded=uploaded, errors=errors)
+
+
+@app.get("/api/projects/{project_id}/direct-recording", response_model=DirectRecordingStatus)
+def api_get_direct_recording_status(project_id: str) -> DirectRecordingStatus:
+    return recording_manager.get_status(project_id)
+
+
+@app.post("/api/projects/{project_id}/direct-recording/start", response_model=DirectRecordingStatus)
+def api_start_direct_recording(project_id: str, payload: StartDirectRecordingRequest) -> DirectRecordingStatus:
+    return recording_manager.start(project_id, payload)
+
+
+@app.post("/api/projects/{project_id}/direct-recording/stop", response_model=StopDirectRecordingResponse)
+def api_stop_direct_recording(project_id: str) -> StopDirectRecordingResponse:
+    return recording_manager.stop(project_id)
 
 
 @app.patch("/api/projects/{project_id}/stems/{stem_id}")
@@ -360,6 +386,11 @@ def api_update_mix_controls(project_id: str, payload: UpdateMixControlsRequest) 
 @app.post("/api/projects/{project_id}/reset-advanced-mix", response_model=Project)
 def api_reset_advanced_mix(project_id: str) -> Project:
     return reset_advanced_mix(project_id)
+
+
+@app.post("/api/projects/{project_id}/reset-stem-processing", response_model=Project)
+def api_reset_stem_processing(project_id: str) -> Project:
+    return reset_stem_processing(project_id)
 
 
 @app.post("/api/projects/{project_id}/rough-mix", response_model=RoughMixResponse)

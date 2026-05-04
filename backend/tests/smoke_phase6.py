@@ -89,7 +89,7 @@ def main() -> None:
 
         controls = client.patch(
             f"/api/projects/{project_id}/mastering-controls",
-            json={"selectedMixVersionId": mix_two_payload["id"], "preset": "Streaming", "outputFormat": "WAV 16-bit"},
+            json={"selectedMixVersionId": mix_two_payload["id"], "preset": "Streaming", "outputFormat": "WAV 16-bit", "trimStartSeconds": 0.2, "trimEndSeconds": 0.1},
         )
         assert controls.status_code == 200, controls.text
 
@@ -104,17 +104,24 @@ def main() -> None:
                 "compressionAmount": 45,
                 "limiterStrength": 55,
                 "stereoWidth": 56,
+                "trimStartSeconds": 0.2,
+                "trimEndSeconds": 0.1,
             },
         )
         assert master_wav.status_code == 200, master_wav.text
         master_one = master_wav.json()
         assert master_one["versionNumber"] == 1, master_one
-        assert "exports/masters/master_v001.wav" in master_one["filePath"], master_one
+        assert "exports/masters/Phase_6_Smoke.wav" in master_one["filePath"], master_one
         assert resolve_stored_file_path(master_one["filePath"]).exists(), master_one
         assert resolve_stored_file_path(master_one["reportJsonPath"]).exists(), master_one
         assert resolve_stored_file_path(master_one["reportTxtPath"]).exists(), master_one
         assert master_one["report"]["preset"] == "Streaming", master_one
         assert master_one["report"]["outputFormat"] == "WAV 16-bit", master_one
+        assert master_one["settings"]["trimStartSeconds"] == 0.2, master_one
+        assert master_one["settings"]["trimEndSeconds"] == 0.1, master_one
+        with wave.open(str(resolve_stored_file_path(master_one["filePath"])), "rb") as mastered_audio:
+            master_duration = mastered_audio.getnframes() / mastered_audio.getframerate()
+        assert 0.8 <= master_duration <= 1.0, master_duration
 
         master_mp3_job = client.post(
             f"/api/projects/{project_id}/masters-job",
@@ -127,6 +134,8 @@ def main() -> None:
                 "compressionAmount": 40,
                 "limiterStrength": 55,
                 "stereoWidth": 55,
+                "trimStartSeconds": 0.0,
+                "trimEndSeconds": 0.0,
             },
         )
         assert master_mp3_job.status_code == 200, master_mp3_job.text
@@ -135,15 +144,16 @@ def main() -> None:
         assert master_job.json()["status"] == "Completed", master_job.json()
         project_after_master_job = client.get(f"/api/projects/{project_id}").json()
         master_two = project_after_master_job["masteringSettings"]["masterVersions"][-1]
-        assert "exports/masters/master_v002.mp3" in master_two["filePath"], master_two
+        assert "exports/masters/Phase_6_Smoke_v002.mp3" in master_two["filePath"], master_two
         assert resolve_stored_file_path(master_two["filePath"]).exists(), master_two
 
         unmastered = client.post(
             f"/api/projects/{project_id}/exports/mix",
-            json={"selectedMixVersionId": mix_two_payload["id"], "outputFormat": "FLAC"},
+            json={"selectedMixVersionId": mix_two_payload["id"], "outputFormat": "FLAC", "trimStartSeconds": 0.15, "trimEndSeconds": 0.0},
         )
         assert unmastered.status_code == 200, unmastered.text
         assert resolve_stored_file_path(unmastered.json()["filePath"]).exists(), unmastered.json()
+        assert any("cropped" in warning for warning in unmastered.json().get("warnings", [])), unmastered.json()
 
         vocal_stem = next(stem for stem in stems if stem["originalFilename"] == "lead_vocal.wav")
         assert client.patch(f"/api/projects/{project_id}/mix-settings/{vocal_stem['id']}", json={"mute": True}).status_code == 200
@@ -151,7 +161,7 @@ def main() -> None:
         assert instrumental_mix.status_code == 200, instrumental_mix.text
         instrumental = client.post(
             f"/api/projects/{project_id}/exports/instrumental",
-            json={"selectedMixVersionId": instrumental_mix.json()["id"], "outputFormat": "WAV 24-bit"},
+            json={"selectedMixVersionId": instrumental_mix.json()["id"], "outputFormat": "WAV 24-bit", "trimStartSeconds": 0.0, "trimEndSeconds": 0.0},
         )
         assert instrumental.status_code == 200, instrumental.text
         assert resolve_stored_file_path(instrumental.json()["filePath"]).exists(), instrumental.json()

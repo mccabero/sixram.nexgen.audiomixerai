@@ -13,6 +13,7 @@ import {
   listMixPresets,
   renameMixVersion,
   resetAdvancedMix,
+  resetStemProcessing,
   startAdvancedMix,
   startInstrumentalMix,
   updateCleaningSettings,
@@ -30,19 +31,19 @@ import { formatDateTime, formatDb, formatLufs, formatPan } from "../utils/format
 
 const defaultControls = {
   preset: "Balanced",
-  vocalBoost: 1.5,
-  vocalBusLevel: 0,
-  vocalGlueAmount: 45,
-  vocalDelayAmount: 25,
-  backingVocalWidth: 60,
+  vocalBoost: 2.0,
+  vocalBusLevel: 0.4,
+  vocalGlueAmount: 22,
+  vocalDelayAmount: 4,
+  backingVocalWidth: 55,
   drumPunch: 50,
   bassWeight: 50,
   brightness: 0,
   warmth: 0,
   width: 55,
-  reverbAmount: 35,
-  vocalReverbAmount: 35,
-  roomSize: 45,
+  reverbAmount: 24,
+  vocalReverbAmount: 14,
+  roomSize: 38,
 };
 const runningStatuses = new Set(["Pending", "Processing"]);
 
@@ -207,7 +208,22 @@ export default function MixerPage() {
     setError("");
     try {
       setProject(await resetAdvancedMix(projectId));
+      setRoughMix(null);
       setPreviewNotice("Auto mix settings reset. Generate a new mix version to hear the update.");
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setActionLoading("");
+    }
+  };
+
+  const runResetStemProcessing = async () => {
+    setActionLoading("resetStems");
+    setError("");
+    try {
+      setProject(await resetStemProcessing(projectId));
+      setRoughMix(null);
+      setPreviewNotice("Stem processing reset to the current auto mix defaults. Generate a new preview or mix version to hear the update.");
     } catch (err) {
       setError(err.message);
     } finally {
@@ -464,7 +480,52 @@ export default function MixerPage() {
         </div>
       </div>
 
-      <WorkflowGuide project={project} currentStep="mixer" className="mt-6" />
+      <WorkflowGuide project={project} currentStep="mixer" className="mt-6" onProjectRefresh={loadProject} />
+
+      <section className="mt-6">
+        <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <h2 className="text-xl font-semibold text-white">Stem Processing</h2>
+            <p className="mt-1 text-sm text-zinc-400">Per-stem balance, source, dynamics, and send levels.</p>
+          </div>
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+            <Button type="button" variant="secondary" onClick={runResetStemProcessing} disabled={!stems.length || actionLoading === "resetStems"} className="sm:w-auto">
+              <RotateCcw size={17} />
+              Reset Stem Processing
+            </Button>
+            {latestVersion ? <StatusBadge status="Advanced Mix Ready" /> : null}
+          </div>
+        </div>
+        {stems.length ? (
+          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-5">
+            {stems.map((stem) => {
+              const setting = { ...defaultSetting(stem.id), ...(settingsByStem.get(stem.id) || {}) };
+              return (
+                <StemProcessingCard
+                  key={stem.id}
+                  stem={stem}
+                  setting={setting}
+                  saving={savingStemId === stem.id}
+                  onLocalChange={updateLocalSetting}
+                  onCommit={commitSetting}
+                  onToggleCleaned={toggleCleanedSource}
+                />
+              );
+            })}
+          </div>
+        ) : (
+          <EmptyState
+            icon={SlidersHorizontal}
+            title="No stems in the mixer"
+            description="Upload stems before building an advanced mix."
+            action={
+              <Button as={Link} to={`/projects/${projectId}/upload`}>
+                Upload stems
+              </Button>
+            }
+          />
+        )}
+      </section>
 
       {error ? <p className="mt-5 rounded-lg border border-rose-300/20 bg-rose-400/10 px-3 py-2 text-sm text-rose-100">{error}</p> : null}
 
@@ -582,44 +643,6 @@ export default function MixerPage() {
         />
       </section>
 
-      <section className="mt-6">
-        <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            <h2 className="text-xl font-semibold text-white">Stem Processing</h2>
-            <p className="mt-1 text-sm text-zinc-400">Per-stem balance, source, dynamics, and send levels.</p>
-          </div>
-          {latestVersion ? <StatusBadge status="Advanced Mix Ready" /> : null}
-        </div>
-        {stems.length ? (
-          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-5">
-            {stems.map((stem) => {
-              const setting = { ...defaultSetting(stem.id), ...(settingsByStem.get(stem.id) || {}) };
-              return (
-                <StemProcessingCard
-                  key={stem.id}
-                  stem={stem}
-                  setting={setting}
-                  saving={savingStemId === stem.id}
-                  onLocalChange={updateLocalSetting}
-                  onCommit={commitSetting}
-                  onToggleCleaned={toggleCleanedSource}
-                />
-              );
-            })}
-          </div>
-        ) : (
-          <EmptyState
-            icon={SlidersHorizontal}
-            title="No stems in the mixer"
-            description="Upload stems before building an advanced mix."
-            action={
-              <Button as={Link} to={`/projects/${projectId}/upload`}>
-                Upload stems
-              </Button>
-            }
-          />
-        )}
-      </section>
     </div>
   );
 }
@@ -971,6 +994,7 @@ function actionPanelFor(actionLoading, savingStemId, mixJob) {
   if (actionLoading === "generate") return { title: "Generating Auto Balance", message: "Calculating suggested gain and pan from analyzed stems." };
   if (actionLoading === "apply") return { title: "Applying Auto Balance", message: "Writing suggested gain and pan into mixer settings." };
   if (actionLoading === "reset") return { title: "Resetting Auto Mix", message: "Restoring preset controls and stem processing defaults." };
+  if (actionLoading === "resetStems") return { title: "Resetting Stem Processing", message: "Restoring per-stem balance, pan, chain, and send defaults." };
   if (actionLoading === "preview") return { title: "Rendering Rough Mix", message: "Exporting the gain-and-pan preview." };
   if (actionLoading === "advanced") return { title: "Starting Advanced Mix", message: "Creating the local mix render job." };
   if (actionLoading === "instrumental") return { title: "Starting Instrumental Mix", message: "Creating a vocal-muted mix render job." };
@@ -1026,6 +1050,6 @@ function defaultSetting(stemId) {
     reverbSend: 35,
     delaySend: 0,
     presenceAmount: 0,
-    compressionAmount: 50,
+    compressionAmount: 45,
   };
 }
