@@ -32,7 +32,22 @@ export default function StemList({ stems, onChangeType, onAcceptDetection, onDel
               return (
                 <div key={stem.id} className="grid gap-4 px-4 py-4 xl:grid-cols-[minmax(220px,1.4fr)_190px_170px_110px_120px_120px] xl:items-center">
                   <div className="min-w-0">
-                    <p className="truncate font-medium text-white">{stem.originalFilename}</p>
+                    <div className="flex items-start justify-between gap-3">
+                      <p className="min-w-0 truncate font-medium text-white">{stem.originalFilename}</p>
+                      {onDelete ? (
+                        <Button
+                          type="button"
+                          variant="danger"
+                          className="h-9 w-9 shrink-0 px-0 xl:hidden"
+                          onClick={() => onDelete(stem.id)}
+                          disabled={busyStemId === stem.id}
+                          aria-label={`Delete ${stem.originalFilename}`}
+                          title="Delete stem"
+                        >
+                          <Trash2 size={16} />
+                        </Button>
+                      ) : null}
+                    </div>
                     <p className="mt-1 truncate text-xs text-zinc-500">{stem.filePath}</p>
                     <p className="mt-1 text-xs text-zinc-500">{formatDateTime(stem.uploadedAt)}</p>
                   </div>
@@ -80,7 +95,7 @@ export default function StemList({ stems, onChangeType, onAcceptDetection, onDel
                       <Button
                         type="button"
                         variant="danger"
-                        className="h-10 w-10 px-0"
+                        className="hidden h-10 w-10 px-0 xl:inline-flex"
                         onClick={() => onDelete(stem.id)}
                         disabled={busyStemId === stem.id}
                         aria-label={`Delete ${stem.originalFilename}`}

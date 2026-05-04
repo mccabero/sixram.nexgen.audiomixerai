@@ -28,7 +28,7 @@ import { formatDb, formatLufs } from "../utils/format.js";
 const runningStatuses = new Set(["Pending", "Processing"]);
 const vocalTypes = new Set(["Lead Vocal", "Backing Vocal"]);
 const defaultOptions = {
-  presets: ["Natural Clean", "Pop Vocal", "Worship Lead", "Live Vocal Fix", "Bright AI Polish", "Warm Ballad", "Backing Vocal Wide"],
+  presets: ["AI Pop Clean", "Natural Clean", "Pop Vocal", "Worship Lead", "Live Vocal Fix", "Bright AI Polish", "Warm Ballad", "Backing Vocal Wide"],
   pitchCorrectionModes: ["Off", "Natural", "Medium", "Strong"],
   fxStyles: ["Dry", "Natural Plate", "Small Hall", "Slap Delay", "Quarter Delay", "Worship Wide"],
   keys: ["Auto", "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"],
@@ -923,7 +923,7 @@ function Readout({ label, value }) {
 function vocalSettings(stem) {
   return {
     enabled: false,
-    preset: "Natural Clean",
+    preset: "AI Pop Clean",
     pitchCorrection: "Off",
     key: "Auto",
     scale: "Major",
@@ -933,14 +933,14 @@ function vocalSettings(stem) {
     presenceAmount: 0,
     airAmount: 0,
     deEssAmount: 50,
-    compressionAmount: 45,
-    riderAmount: 45,
-    saturationAmount: 50,
-    doublerAmount: 50,
+    compressionAmount: 40,
+    riderAmount: 36,
+    saturationAmount: 18,
+    doublerAmount: 16,
     breathReductionAmount: 35,
     mouthClickReductionAmount: 30,
-    pitchStrength: 50,
-    pitchHumanize: 60,
+    pitchStrength: 42,
+    pitchHumanize: 72,
     useEnhancedInMix: true,
     ...(stem.vocalEnhancementSettings || {}),
   };

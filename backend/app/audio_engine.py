@@ -316,14 +316,14 @@ def enhance_vocal_file(
     presence_amount: float = 0,
     air_amount: float = 0,
     de_ess_amount: float = 50,
-    compression_amount: float = 45,
-    rider_amount: float = 45,
-    saturation_amount: float = 50,
-    doubler_amount: float = 50,
+    compression_amount: float = 40,
+    rider_amount: float = 36,
+    saturation_amount: float = 18,
+    doubler_amount: float = 16,
     breath_reduction_amount: float = 35,
     mouth_click_reduction_amount: float = 30,
-    pitch_strength: float = 50,
-    pitch_humanize: float = 60,
+    pitch_strength: float = 42,
+    pitch_humanize: float = 72,
     progress_callback: ProgressCallback | None = None,
 ) -> VocalEnhancementAudioResult:
     ensure_audio_environment()
@@ -402,8 +402,12 @@ def enhance_vocal_file(
     if compression > 0:
         _progress(progress_callback, 0.80, "Compressing vocal")
         threshold_adjust = (50.0 - max(0.0, min(100.0, compression_amount))) / 100.0 * 4.0
-        audio = _compress_audio(audio, threshold_db=params["compressionThresholdDb"] + threshold_adjust, ratio=params["compressionRatio"], mix=compression)
+        audio = _compress_audio(audio, threshold_db=params["compressionThresholdDb"] + threshold_adjust, ratio=params["compressionRatio"], mix=compression, sample_rate=decoded.sample_rate)
         operations.append(f"studio vocal compression ({int(round(compression_amount))}%)")
+
+    audio, headroom_trim_db = _trim_peak_to_target(audio, target_peak_db=-7.5)
+    if headroom_trim_db < -0.1:
+        operations.append(f"pre-harmonic headroom trim ({headroom_trim_db:.1f} dB)")
 
     saturation = _scale_preset_amount(params["saturation"], saturation_amount, max_value=0.22)
     if saturation > 0:
@@ -428,7 +432,7 @@ def enhance_vocal_file(
         operations.append(f"{fx_style} vocal FX send at {int(round(fx_amount))}%")
 
     _progress(progress_callback, 0.94, "Applying vocal safety level")
-    audio = _final_vocal_level(audio, target_peak_db=-1.6)
+    audio = _final_vocal_level(audio, target_peak_db=-3.0)
     operations.append("vocal safety level")
     audio = np.nan_to_num(audio, nan=0.0, posinf=0.0, neginf=0.0)
     audio = np.clip(audio, -0.98, 0.98).astype(np.float32, copy=False)
@@ -878,7 +882,7 @@ def master_audio_file(input_path: Path, output_path: Path, output_format: str, c
             ratio = 1.4 + compression_amount * 2.4
             mix = 0.12 + compression_amount * 0.32
             threshold = -19.0 + compression_amount * 3.5
-            audio = _compress_audio(audio, threshold_db=threshold, ratio=ratio, mix=mix)
+            audio = _compress_audio(audio, threshold_db=threshold, ratio=ratio, mix=mix, sample_rate=decoded.sample_rate)
             operations.append("glue compression")
     except Exception as exc:
         errors.append(f"Glue compression failed: {str(exc) or 'unknown error'}")
@@ -1458,14 +1462,14 @@ def _advanced_chain(stem_type: str, sample_rate: int, controls: dict, compressio
             ("vocal cleanup EQ", lambda audio: _eq_band(audio, sample_rate, 220, 420, -1.8)),
             ("vocal presence EQ", lambda audio: _eq_band(audio, sample_rate, 2500, 5200, 1.4 + brightness * 1.2)),
             ("vocal de-esser", lambda audio: _de_ess(audio, sample_rate, 0.45 + compression_amount * 0.3)),
-            ("vocal compressor", lambda audio: _compress_audio(audio, threshold_db=-22, ratio=3.2, mix=0.45 + compression_amount * 0.4)),
+            ("vocal compressor", lambda audio: _compress_audio(audio, threshold_db=-22, ratio=3.2, mix=0.45 + compression_amount * 0.4, sample_rate=sample_rate)),
             ("vocal tone", tone),
         ]
     if stem_type == "Backing Vocal":
         return [
             ("backing vocal high-pass", lambda audio: _high_pass(audio, sample_rate, 100)),
             ("backing vocal cleanup EQ", lambda audio: _eq_band(audio, sample_rate, 250, 500, -1.5)),
-            ("backing vocal compressor", lambda audio: _compress_audio(audio, threshold_db=-24, ratio=3.0, mix=0.4 + compression_amount * 0.35)),
+            ("backing vocal compressor", lambda audio: _compress_audio(audio, threshold_db=-24, ratio=3.0, mix=0.4 + compression_amount * 0.35, sample_rate=sample_rate)),
             ("backing vocal spread", lambda audio: _apply_width(audio, 0.08 + width * 0.16 + backing_width * 0.28)),
             ("backing vocal tone", tone),
         ]
@@ -1473,7 +1477,7 @@ def _advanced_chain(stem_type: str, sample_rate: int, controls: dict, compressio
         return [
             ("drum low-end cleanup", lambda audio: _high_pass(audio, sample_rate, 28)),
             ("drum mud control", lambda audio: _eq_band(audio, sample_rate, 260, 520, -1.0)),
-            ("drum bus compression", lambda audio: _compress_audio(audio, threshold_db=-18, ratio=2.2 + drum_punch * 1.4, mix=0.18 + compression_amount * 0.22)),
+            ("drum bus compression", lambda audio: _compress_audio(audio, threshold_db=-18, ratio=2.2 + drum_punch * 1.4, mix=0.18 + compression_amount * 0.22, sample_rate=sample_rate)),
             ("drum transient tone", lambda audio: _eq_band(audio, sample_rate, 4500, 9000, drum_punch * 1.0 + brightness * 0.8)),
             ("drum tone", tone),
         ]
@@ -1482,21 +1486,21 @@ def _advanced_chain(stem_type: str, sample_rate: int, controls: dict, compressio
             ("kick rumble cleanup", lambda audio: _high_pass(audio, sample_rate, 24)),
             ("kick low-end control", lambda audio: _eq_band(audio, sample_rate, 180, 360, -1.2)),
             ("kick weight", lambda audio: _eq_band(audio, sample_rate, 45, 90, -0.5 + bass_weight * 1.2)),
-            ("kick compression", lambda audio: _compress_audio(audio, threshold_db=-17, ratio=3.4, mix=0.25 + compression_amount * 0.28)),
+            ("kick compression", lambda audio: _compress_audio(audio, threshold_db=-17, ratio=3.4, mix=0.25 + compression_amount * 0.28, sample_rate=sample_rate)),
         ]
     if stem_type == "Snare":
         return [
             ("snare high-pass", lambda audio: _high_pass(audio, sample_rate, 70)),
             ("snare body control", lambda audio: _eq_band(audio, sample_rate, 350, 700, -0.8)),
             ("snare crack", lambda audio: _eq_band(audio, sample_rate, 3000, 6500, 0.8 + drum_punch * 1.0)),
-            ("snare compression", lambda audio: _compress_audio(audio, threshold_db=-19, ratio=2.8, mix=0.2 + compression_amount * 0.25)),
+            ("snare compression", lambda audio: _compress_audio(audio, threshold_db=-19, ratio=2.8, mix=0.2 + compression_amount * 0.25, sample_rate=sample_rate)),
         ]
     if stem_type == "Bass":
         return [
             ("bass sub cleanup", lambda audio: _high_pass(audio, sample_rate, 28)),
             ("bass low-end control", lambda audio: _eq_band(audio, sample_rate, 45, 110, -0.4 + bass_weight * 1.4)),
             ("bass mud control", lambda audio: _eq_band(audio, sample_rate, 180, 420, -1.0)),
-            ("bass compression", lambda audio: _compress_audio(audio, threshold_db=-21, ratio=3.8, mix=0.35 + compression_amount * 0.38)),
+            ("bass compression", lambda audio: _compress_audio(audio, threshold_db=-21, ratio=3.8, mix=0.35 + compression_amount * 0.38, sample_rate=sample_rate)),
             ("bass saturation", lambda audio: _saturate(audio, drive=1.15 + bass_weight * 0.45, mix=0.08 + bass_weight * 0.08)),
             ("bass mono focus", lambda audio: _apply_width(audio, -0.35)),
         ]
@@ -1505,7 +1509,7 @@ def _advanced_chain(stem_type: str, sample_rate: int, controls: dict, compressio
             ("electric guitar high-pass", lambda audio: _high_pass(audio, sample_rate, 72)),
             ("electric guitar mud control", lambda audio: _eq_band(audio, sample_rate, 220, 520, -1.8)),
             ("electric guitar bite", lambda audio: _eq_band(audio, sample_rate, 2200, 5200, 0.5 + brightness * 0.9)),
-            ("electric guitar compression", lambda audio: _compress_audio(audio, threshold_db=-20, ratio=2.4, mix=0.16 + compression_amount * 0.22)),
+            ("electric guitar compression", lambda audio: _compress_audio(audio, threshold_db=-20, ratio=2.4, mix=0.16 + compression_amount * 0.22, sample_rate=sample_rate)),
             ("electric guitar width", lambda audio: _apply_width(audio, width * 0.18)),
             ("electric guitar tone", tone),
         ]
@@ -1514,7 +1518,7 @@ def _advanced_chain(stem_type: str, sample_rate: int, controls: dict, compressio
             ("acoustic high-pass", lambda audio: _high_pass(audio, sample_rate, 86)),
             ("acoustic boom control", lambda audio: _eq_band(audio, sample_rate, 140, 320, -1.6)),
             ("acoustic presence", lambda audio: _eq_band(audio, sample_rate, 2500, 6500, 0.7 + brightness * 0.8)),
-            ("acoustic compression", lambda audio: _compress_audio(audio, threshold_db=-22, ratio=2.2, mix=0.18 + compression_amount * 0.2)),
+            ("acoustic compression", lambda audio: _compress_audio(audio, threshold_db=-22, ratio=2.2, mix=0.18 + compression_amount * 0.2, sample_rate=sample_rate)),
             ("acoustic tone", tone),
         ]
     if stem_type == "Keys/Piano":
@@ -1522,7 +1526,7 @@ def _advanced_chain(stem_type: str, sample_rate: int, controls: dict, compressio
             ("keys high-pass", lambda audio: _high_pass(audio, sample_rate, 58)),
             ("keys vocal-space EQ", lambda audio: _eq_band(audio, sample_rate, 1800, 4200, -0.7)),
             ("keys width", lambda audio: _apply_width(audio, width * 0.22)),
-            ("keys light compression", lambda audio: _compress_audio(audio, threshold_db=-24, ratio=1.8, mix=0.08 + compression_amount * 0.14)),
+            ("keys light compression", lambda audio: _compress_audio(audio, threshold_db=-24, ratio=1.8, mix=0.08 + compression_amount * 0.14, sample_rate=sample_rate)),
             ("keys tone", tone),
         ]
     if stem_type == "Pads/Strings":
@@ -1541,7 +1545,7 @@ def _advanced_chain(stem_type: str, sample_rate: int, controls: dict, compressio
     return [
         ("general high-pass", lambda audio: _high_pass(audio, sample_rate, 50)),
         ("general cleanup EQ", lambda audio: _eq_band(audio, sample_rate, 250, 500, -0.8)),
-        ("general compression", lambda audio: _compress_audio(audio, threshold_db=-22, ratio=2.0, mix=0.1 + compression_amount * 0.16)),
+        ("general compression", lambda audio: _compress_audio(audio, threshold_db=-22, ratio=2.0, mix=0.1 + compression_amount * 0.16, sample_rate=sample_rate)),
         ("general tone", tone),
     ]
 
@@ -1556,17 +1560,47 @@ def _eq_band(audio: np.ndarray, sample_rate: int, low_hz: float, high_hz: float,
     return (audio + band * (_db_to_linear(gain_db) - 1.0)).astype(np.float32, copy=False)
 
 
-def _compress_audio(audio: np.ndarray, threshold_db: float, ratio: float, mix: float) -> np.ndarray:
+def _compress_audio(audio: np.ndarray, threshold_db: float, ratio: float, mix: float, sample_rate: int = 44100) -> np.ndarray:
     mix = max(0.0, min(1.0, mix))
     if mix <= 0:
         return audio
-    threshold = _db_to_linear(threshold_db)
-    ratio = max(1.0, ratio)
-    magnitude = np.abs(audio)
-    over = magnitude > threshold
-    compressed_mag = np.where(over, threshold + (magnitude - threshold) / ratio, magnitude)
-    compressed = np.sign(audio) * compressed_mag
+    sample_rate = max(8000, int(sample_rate))
+    ratio = max(1.0, float(ratio))
+    detector = np.max(np.abs(audio), axis=1) if audio.ndim == 2 else np.abs(audio)
+    detector = detector.astype(np.float32, copy=False)
+    attack_coeff = math.exp(-1.0 / max(1.0, sample_rate * 0.008))
+    release_coeff = math.exp(-1.0 / max(1.0, sample_rate * 0.090))
+    envelope = np.empty_like(detector, dtype=np.float32)
+    previous = 0.0
+    for index, sample in enumerate(detector):
+        coeff = attack_coeff if sample > previous else release_coeff
+        previous = coeff * previous + (1.0 - coeff) * float(sample)
+        envelope[index] = previous
+    envelope_db = np.array([_linear_to_db(float(max(value, 1e-9))) for value in envelope], dtype=np.float32)
+    over_db = np.maximum(envelope_db - float(threshold_db), 0.0)
+    gain_reduction_db = over_db * (1.0 - 1.0 / ratio)
+    gain = np.power(10.0, -gain_reduction_db / 20.0).astype(np.float32, copy=False)
+    compressed = audio * gain[:, None] if audio.ndim == 2 else audio * gain
     return (audio * (1.0 - mix) + compressed * mix).astype(np.float32, copy=False)
+
+
+def _trim_peak_to_target(audio: np.ndarray, target_peak_db: float) -> tuple[np.ndarray, float]:
+    peak = float(np.max(np.abs(audio))) if audio.size else 0.0
+    if peak <= 1e-8:
+        return audio.astype(np.float32, copy=False), 0.0
+    target = _db_to_linear(target_peak_db)
+    if peak <= target:
+        return audio.astype(np.float32, copy=False), 0.0
+    gain = target / peak
+    return (audio * gain).astype(np.float32, copy=False), _round(_linear_to_db(gain))
+
+
+def _peak_limit(audio: np.ndarray, ceiling: float = 0.98) -> np.ndarray:
+    ceiling = max(0.1, min(0.999, float(ceiling)))
+    peak = float(np.max(np.abs(audio))) if audio.size else 0.0
+    if peak <= ceiling or peak <= 1e-8:
+        return audio.astype(np.float32, copy=False)
+    return (audio * (ceiling / peak)).astype(np.float32, copy=False)
 
 
 def _saturate(audio: np.ndarray, drive: float, mix: float) -> np.ndarray:
@@ -1620,95 +1654,110 @@ def _apply_stem_presence(audio: np.ndarray, sample_rate: int, stem_type: str, am
 
 def _vocal_enhancer_parameters(preset: str) -> dict[str, float]:
     presets = {
+        "AI Pop Clean": {
+            "highPassHz": 92,
+            "noiseReduction": 0.10,
+            "deEss": 0.42,
+            "rider": 0.30,
+            "bodyDb": 0.1,
+            "presenceDb": 1.1,
+            "airDb": 0.9,
+            "compression": 0.38,
+            "compressionThresholdDb": -22,
+            "compressionRatio": 2.2,
+            "saturation": 0.018,
+            "doubler": 0.025,
+            "width": 0.01,
+        },
         "Natural Clean": {
             "highPassHz": 88,
             "noiseReduction": 0.12,
             "deEss": 0.36,
-            "rider": 0.42,
+            "rider": 0.34,
             "bodyDb": 0.2,
             "presenceDb": 0.9,
             "airDb": 0.7,
-            "compression": 0.48,
+            "compression": 0.40,
             "compressionThresholdDb": -23,
-            "compressionRatio": 2.6,
-            "saturation": 0.04,
+            "compressionRatio": 2.4,
+            "saturation": 0.022,
             "doubler": 0.0,
             "width": 0.0,
         },
         "Pop Vocal": {
             "highPassHz": 95,
             "noiseReduction": 0.14,
-            "deEss": 0.52,
-            "rider": 0.58,
+            "deEss": 0.48,
+            "rider": 0.46,
             "bodyDb": -0.1,
-            "presenceDb": 1.5,
-            "airDb": 1.4,
-            "compression": 0.66,
-            "compressionThresholdDb": -24,
-            "compressionRatio": 3.2,
-            "saturation": 0.075,
-            "doubler": 0.10,
-            "width": 0.04,
+            "presenceDb": 1.2,
+            "airDb": 1.1,
+            "compression": 0.54,
+            "compressionThresholdDb": -23,
+            "compressionRatio": 2.8,
+            "saturation": 0.045,
+            "doubler": 0.05,
+            "width": 0.02,
         },
         "Worship Lead": {
             "highPassHz": 90,
             "noiseReduction": 0.14,
-            "deEss": 0.46,
-            "rider": 0.56,
+            "deEss": 0.44,
+            "rider": 0.48,
             "bodyDb": 0.3,
             "presenceDb": 1.1,
             "airDb": 1.0,
-            "compression": 0.58,
+            "compression": 0.50,
             "compressionThresholdDb": -24,
-            "compressionRatio": 2.9,
-            "saturation": 0.05,
-            "doubler": 0.08,
-            "width": 0.03,
+            "compressionRatio": 2.7,
+            "saturation": 0.03,
+            "doubler": 0.04,
+            "width": 0.02,
         },
         "Live Vocal Fix": {
             "highPassHz": 105,
             "noiseReduction": 0.22,
             "deEss": 0.48,
-            "rider": 0.62,
+            "rider": 0.50,
             "bodyDb": -0.2,
             "presenceDb": 0.8,
             "airDb": 0.4,
-            "compression": 0.56,
+            "compression": 0.46,
             "compressionThresholdDb": -24,
-            "compressionRatio": 3.0,
-            "saturation": 0.035,
+            "compressionRatio": 2.7,
+            "saturation": 0.02,
             "doubler": 0.0,
             "width": 0.0,
         },
         "Bright AI Polish": {
             "highPassHz": 100,
             "noiseReduction": 0.18,
-            "deEss": 0.62,
-            "rider": 0.68,
+            "deEss": 0.56,
+            "rider": 0.50,
             "bodyDb": -0.3,
-            "presenceDb": 1.9,
-            "airDb": 2.1,
-            "compression": 0.72,
-            "compressionThresholdDb": -25,
-            "compressionRatio": 3.6,
-            "saturation": 0.09,
-            "doubler": 0.12,
-            "width": 0.05,
+            "presenceDb": 1.4,
+            "airDb": 1.5,
+            "compression": 0.58,
+            "compressionThresholdDb": -23.5,
+            "compressionRatio": 3.0,
+            "saturation": 0.04,
+            "doubler": 0.04,
+            "width": 0.01,
         },
         "Warm Ballad": {
             "highPassHz": 82,
             "noiseReduction": 0.12,
             "deEss": 0.38,
-            "rider": 0.50,
+            "rider": 0.40,
             "bodyDb": 0.8,
             "presenceDb": 0.7,
             "airDb": 0.6,
-            "compression": 0.54,
+            "compression": 0.46,
             "compressionThresholdDb": -23,
             "compressionRatio": 2.7,
-            "saturation": 0.08,
-            "doubler": 0.04,
-            "width": 0.02,
+            "saturation": 0.045,
+            "doubler": 0.02,
+            "width": 0.01,
         },
         "Backing Vocal Wide": {
             "highPassHz": 115,
@@ -1841,14 +1890,14 @@ def _vocal_doubler(audio: np.ndarray, sample_rate: int, amount: float) -> np.nda
     if amount <= 0 or audio.size == 0:
         return audio
     delay = max(1, int(sample_rate * 0.018))
-    doubled = audio.copy()
+    doubled = audio.astype(np.float32, copy=True) * (1.0 - amount * 0.12)
     delayed = np.zeros_like(audio)
     if delay < audio.shape[0]:
         delayed[delay:, 0] = audio[:-delay, 1] if audio.shape[1] > 1 else audio[:-delay, 0]
         delayed[delay:, 1] = audio[:-delay, 0] if audio.shape[1] > 1 else audio[:-delay, 0]
-    doubled[:, 0] += delayed[:, 0] * amount
-    doubled[:, 1] -= delayed[:, 1] * amount * 0.65
-    return np.clip(doubled, -1.2, 1.2).astype(np.float32, copy=False)
+    doubled[:, 0] += delayed[:, 0] * amount * 0.65
+    doubled[:, 1] -= delayed[:, 1] * amount * 0.42
+    return _peak_limit(doubled, ceiling=0.98)
 
 
 def _apply_vocal_fx(audio: np.ndarray, sample_rate: int, style: str, amount: float) -> np.ndarray:
@@ -1856,35 +1905,30 @@ def _apply_vocal_fx(audio: np.ndarray, sample_rate: int, style: str, amount: flo
     if amount_ratio <= 0:
         return audio
     if style == "Natural Plate":
-        wet = _simple_reverb(audio, sample_rate, amount=0.18 * amount_ratio, room_size=0.52)
-        mixed = audio + wet
+        wet = _simple_reverb(audio, sample_rate, amount=0.12 * amount_ratio, room_size=0.48)
+        mixed = audio * (1.0 - 0.08 * amount_ratio) + wet
     elif style == "Small Hall":
-        wet = _simple_reverb(audio, sample_rate, amount=0.25 * amount_ratio, room_size=0.82)
-        mixed = audio + wet
+        wet = _simple_reverb(audio, sample_rate, amount=0.16 * amount_ratio, room_size=0.74)
+        mixed = audio * (1.0 - 0.10 * amount_ratio) + wet
     elif style == "Slap Delay":
-        wet = _delay_effect(audio, sample_rate, delay_seconds=0.105, feedback=0.10, amount=0.20 * amount_ratio)
-        mixed = audio + wet
+        wet = _delay_effect(audio, sample_rate, delay_seconds=0.105, feedback=0.10, amount=0.14 * amount_ratio)
+        mixed = audio * (1.0 - 0.06 * amount_ratio) + wet
     elif style == "Quarter Delay":
-        wet = _delay_effect(audio, sample_rate, delay_seconds=0.32, feedback=0.26, amount=0.16 * amount_ratio)
-        mixed = audio + wet
+        wet = _delay_effect(audio, sample_rate, delay_seconds=0.32, feedback=0.22, amount=0.12 * amount_ratio)
+        mixed = audio * (1.0 - 0.08 * amount_ratio) + wet
     elif style == "Worship Wide":
-        reverb = _simple_reverb(audio, sample_rate, amount=0.24 * amount_ratio, room_size=0.95)
-        delay = _delay_effect(audio, sample_rate, delay_seconds=0.28, feedback=0.28, amount=0.14 * amount_ratio)
+        reverb = _simple_reverb(audio, sample_rate, amount=0.16 * amount_ratio, room_size=0.88)
+        delay = _delay_effect(audio, sample_rate, delay_seconds=0.28, feedback=0.22, amount=0.10 * amount_ratio)
         spread = _apply_width(delay + reverb, 0.26)
-        mixed = audio + spread
+        mixed = audio * (1.0 - 0.12 * amount_ratio) + spread
     else:
         mixed = audio
-    return np.clip(mixed, -1.2, 1.2).astype(np.float32, copy=False)
+    return _peak_limit(mixed, ceiling=0.98)
 
 
 def _final_vocal_level(audio: np.ndarray, target_peak_db: float) -> np.ndarray:
-    peak = float(np.max(np.abs(audio))) if audio.size else 0.0
-    if peak <= 1e-8:
-        return audio
-    target = _db_to_linear(target_peak_db)
-    if peak > target:
-        return (audio * (target / peak)).astype(np.float32, copy=False)
-    return audio.astype(np.float32, copy=False)
+    trimmed, _ = _trim_peak_to_target(audio, target_peak_db)
+    return trimmed
 
 
 def _apply_master_tone(audio: np.ndarray, sample_rate: int, controls: dict) -> np.ndarray:
@@ -1905,7 +1949,7 @@ def _process_vocal_mix_bus(audio: np.ndarray, sample_rate: int, controls: dict, 
     vocal_bus = audio.astype(np.float32, copy=True)
     glue = _control_ratio(controls, "vocalGlueAmount")
     if glue > 0.01:
-        vocal_bus = _compress_audio(vocal_bus, threshold_db=-21.5 + (0.5 - glue) * 4.0, ratio=1.5 + glue * 2.0, mix=0.12 + glue * 0.30)
+        vocal_bus = _compress_audio(vocal_bus, threshold_db=-21.5 + (0.5 - glue) * 4.0, ratio=1.5 + glue * 2.0, mix=0.12 + glue * 0.30, sample_rate=sample_rate)
     delay_amount = _control_ratio(controls, "vocalDelayAmount")
     if delay_amount > 0.01:
         vocal_bus = vocal_bus + _delay_effect(vocal_bus, sample_rate, delay_seconds=0.285, feedback=0.18 + delay_amount * 0.12, amount=0.02 + delay_amount * 0.055)

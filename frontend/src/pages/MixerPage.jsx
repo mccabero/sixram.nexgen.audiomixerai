@@ -742,18 +742,25 @@ function MixPreviewPanel({
         <div className="mt-4 space-y-2">
           <p className="text-xs font-semibold uppercase tracking-[0.12em] text-zinc-500">Version Library</p>
           {mixVersions.slice().reverse().map((version) => (
-            <div key={version.id} className="grid gap-3 rounded-lg border border-white/10 bg-black/20 p-3 lg:grid-cols-[minmax(190px,0.85fr)_minmax(150px,0.55fr)_minmax(320px,1.25fr)_auto] lg:items-center">
+            <div key={version.id} className="grid gap-3 rounded-lg border border-white/10 bg-black/20 p-3 lg:grid-cols-[minmax(190px,0.85fr)_minmax(150px,0.55fr)_minmax(320px,1.25fr)] lg:items-center">
               <div className="min-w-0">
-                {editingVersionId === version.id ? (
-                  <input
-                    value={versionDraft}
-                    onChange={(event) => setVersionDraft(event.target.value)}
-                    className="h-9 w-full rounded-lg border border-white/10 bg-black/30 px-3 text-sm text-white"
-                    autoFocus
-                  />
-                ) : (
-                  <p className="truncate text-sm font-semibold text-white">{version.label}</p>
-                )}
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0 flex-1">
+                    {editingVersionId === version.id ? (
+                      <input
+                        value={versionDraft}
+                        onChange={(event) => setVersionDraft(event.target.value)}
+                        className="h-9 w-full rounded-lg border border-white/10 bg-black/30 px-3 text-sm text-white"
+                        autoFocus
+                      />
+                    ) : (
+                      <p className="truncate text-sm font-semibold text-white">{version.label}</p>
+                    )}
+                  </div>
+                  <IconButton label="Delete mix" onClick={() => onDeleteVersion(version)} tone="danger">
+                    <Trash2 size={16} />
+                  </IconButton>
+                </div>
                 <p className="mt-1 truncate text-xs text-zinc-500">{version.mp3Path || version.wavPath}</p>
               </div>
               <div className="grid grid-cols-3 gap-2 text-xs text-zinc-400 lg:grid-cols-1 lg:gap-1">
@@ -762,7 +769,7 @@ function MixPreviewPanel({
                 <span>{formatDb(version.peakDbfs)}</span>
               </div>
               <audio className="h-9 w-full min-w-0" src={version.mp3Url || version.wavUrl} controls preload="none" />
-              <div className="flex gap-2 lg:justify-end">
+              <div className="flex gap-2 lg:col-span-3 lg:justify-end">
                 {editingVersionId === version.id ? (
                   <>
                     <IconButton label="Save label" onClick={() => onSaveVersionLabel(version.id)}>
@@ -783,9 +790,6 @@ function MixPreviewPanel({
                     <Pencil size={16} />
                   </IconButton>
                 )}
-                <IconButton label="Delete mix" onClick={() => onDeleteVersion(version)} tone="danger">
-                  <Trash2 size={16} />
-                </IconButton>
               </div>
             </div>
           ))}

@@ -110,12 +110,12 @@ export default function WorkflowGuide({ project, currentStep = "", className = "
   };
 
   return (
-    <section className={`rounded-lg border border-white/10 bg-white/[0.04] p-4 shadow-glow ${className}`}>
+    <section className={`workflow-guide rounded-2xl border border-cyan-300/20 bg-[radial-gradient(circle_at_top_left,rgba(34,211,238,0.18),transparent_36%),linear-gradient(180deg,rgba(10,18,32,0.96),rgba(4,10,20,0.96))] p-4 shadow-[0_20px_60px_rgba(8,145,178,0.12)] ${className}`}>
       <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
         <div className="min-w-0">
-          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-teal-100/70">Step-by-step workflow</p>
+          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-cyan-100/90">Step-by-step workflow</p>
           <h2 className="mt-2 text-lg font-semibold text-white">{finalStepPage ? "Final Step" : "Next"}: {nextStep.title}</h2>
-          <p className="mt-1 text-sm text-zinc-400">{state.summary}</p>
+          <p className="mt-1 text-sm text-slate-200/80">{state.summary}</p>
         </div>
         <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap xl:justify-end">
           {state.skipCleaningAvailable ? (
@@ -133,15 +133,21 @@ export default function WorkflowGuide({ project, currentStep = "", className = "
         </div>
       </div>
 
+      <div className="mt-4 grid gap-2 md:grid-cols-3 xl:grid-cols-6">
+        {state.steps.map((step) => (
+          <WorkflowStepCard key={step.key} step={step} active={step.key === activeKey} projectId={project.id} />
+        ))}
+      </div>
+
       {state.cleanedSourceControl || state.enhancedSourceControl ? (
-        <div className="mt-4 rounded-lg border border-white/10 bg-black/20 p-4">
+        <div className="workflow-guide-sources mt-4 rounded-xl border border-cyan-300/14 bg-slate-950/55 p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]">
           <div className="flex flex-col gap-1 xl:flex-row xl:items-end xl:justify-between">
             <div>
-              <p className="text-xs font-semibold uppercase tracking-[0.14em] text-teal-100/75">Next Step Input</p>
+              <p className="text-xs font-semibold uppercase tracking-[0.14em] text-cyan-100/90">Next Step Input</p>
               <h3 className="mt-1 text-sm font-semibold text-white">Choose which prepared stems continue forward</h3>
-              <p className="mt-1 text-sm text-zinc-400">{state.sourceSummary}</p>
+              <p className="mt-1 text-sm text-slate-200/75">{state.sourceSummary}</p>
             </div>
-            <p className="text-xs text-zinc-500">Per-stem controls still remain on the Clean Stems and Enhance Vocals pages.</p>
+            <p className="text-xs text-slate-300/55">Per-stem controls still remain on the Clean Stems and Enhance Vocals pages.</p>
           </div>
 
           <div className="mt-3 grid gap-3 xl:grid-cols-2">
@@ -175,15 +181,9 @@ export default function WorkflowGuide({ project, currentStep = "", className = "
             ) : null}
           </div>
 
-          {sourceError ? <p className="mt-3 rounded-lg border border-rose-300/20 bg-rose-400/10 px-3 py-2 text-sm text-rose-100">{sourceError}</p> : null}
+          {sourceError ? <p className="mt-3 rounded-lg border border-rose-300/30 bg-rose-400/14 px-3 py-2 text-sm text-rose-50">{sourceError}</p> : null}
         </div>
       ) : null}
-
-      <div className="mt-4 grid gap-2 md:grid-cols-3 xl:grid-cols-6">
-        {state.steps.map((step) => (
-          <WorkflowStepCard key={step.key} step={step} active={step.key === activeKey} projectId={project.id} />
-        ))}
-      </div>
     </section>
   );
 }
@@ -201,31 +201,37 @@ function WorkflowSourceCard({
   onSecondary,
 }) {
   return (
-    <div className="rounded-lg border border-white/10 bg-white/[0.04] p-3">
+    <div className="workflow-source-card rounded-xl border border-white/12 bg-slate-950/70 p-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]">
       <div className="flex items-start justify-between gap-3">
         <div>
           <p className="text-sm font-semibold text-white">{title}</p>
-          <p className="mt-1 text-xs leading-5 text-zinc-400">{detail}</p>
+          <p className="mt-1 text-xs leading-5 text-slate-200/72">{detail}</p>
         </div>
-        <span className="rounded-full border border-white/10 bg-black/25 px-2 py-0.5 text-[11px] font-semibold text-zinc-300">{currentLabel}</span>
+        <span className="rounded-full border border-cyan-300/18 bg-cyan-400/10 px-2 py-0.5 text-[11px] font-semibold text-cyan-50">{currentLabel}</span>
       </div>
       <div className="mt-3 grid grid-cols-2 gap-2">
         <button
           type="button"
-          disabled={busy || primaryActive}
-          onClick={onPrimary}
+          disabled={busy}
+          aria-pressed={primaryActive}
+          onClick={primaryActive ? undefined : onPrimary}
           className={`min-h-10 rounded-lg border px-3 py-2 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-50 ${
-            primaryActive ? "border-teal-200/30 bg-teal-300/20 text-teal-50 shadow-[0_0_18px_rgba(45,212,191,0.12)]" : "border-white/10 bg-black/20 text-zinc-300 hover:bg-white/[0.06]"
+            primaryActive
+              ? "border-cyan-100/75 bg-gradient-to-br from-cyan-300 via-sky-300 to-sky-400 text-slate-950 shadow-[0_0_0_1px_rgba(224,242,254,0.35),0_12px_28px_rgba(14,165,233,0.28)]"
+              : "border-white/12 bg-slate-900/80 text-slate-100 hover:border-cyan-300/24 hover:bg-slate-900"
           }`}
         >
           {busy && !primaryActive ? "Saving..." : primaryLabel}
         </button>
         <button
           type="button"
-          disabled={busy || secondaryActive}
-          onClick={onSecondary}
+          disabled={busy}
+          aria-pressed={secondaryActive}
+          onClick={secondaryActive ? undefined : onSecondary}
           className={`min-h-10 rounded-lg border px-3 py-2 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-50 ${
-            secondaryActive ? "border-teal-200/30 bg-teal-300/20 text-teal-50 shadow-[0_0_18px_rgba(45,212,191,0.12)]" : "border-white/10 bg-black/20 text-zinc-300 hover:bg-white/[0.06]"
+            secondaryActive
+              ? "border-cyan-100/75 bg-gradient-to-br from-cyan-300 via-sky-300 to-sky-400 text-slate-950 shadow-[0_0_0_1px_rgba(224,242,254,0.35),0_12px_28px_rgba(14,165,233,0.28)]"
+              : "border-white/12 bg-slate-900/80 text-slate-100 hover:border-cyan-300/24 hover:bg-slate-900"
           }`}
         >
           {busy && !secondaryActive ? "Saving..." : secondaryLabel}
@@ -241,10 +247,13 @@ function WorkflowStepCard({ step, active, projectId }) {
   const cardProps = step.available ? { to: step.href(projectId) } : {};
   const statusClass = statusStyles[step.status] || statusStyles.locked;
   const toneClass = active
-    ? "border-teal-200/30 bg-teal-300/10"
+    ? "border-cyan-100/75 bg-[linear-gradient(180deg,rgba(103,232,249,0.34),rgba(14,165,233,0.22))] shadow-[0_0_0_1px_rgba(224,242,254,0.3),0_18px_40px_rgba(14,165,233,0.24)]"
     : step.available
-      ? "border-white/10 bg-black/20 hover:border-teal-200/25 hover:bg-white/[0.06]"
-      : "border-white/10 bg-black/10 opacity-70";
+      ? "border-white/12 bg-slate-950/72 hover:border-cyan-300/28 hover:bg-slate-900/92"
+      : "border-slate-700/45 bg-slate-950/42 opacity-80";
+  const stepNumberClass = active ? "text-slate-950/80" : "text-slate-300/62";
+  const titleClass = active ? "text-slate-950" : "text-white";
+  const detailClass = active ? "text-slate-900/72" : "text-slate-200/68";
 
   return (
     <CardTag {...cardProps} className={`rounded-lg border p-3 transition ${toneClass}`}>
@@ -257,9 +266,9 @@ function WorkflowStepCard({ step, active, projectId }) {
           {step.statusLabel}
         </span>
       </div>
-      <p className="mt-3 text-xs font-semibold uppercase tracking-[0.12em] text-zinc-500">Step {step.number}</p>
-      <p className="mt-1 truncate text-sm font-semibold text-white">{step.title}</p>
-      <p className="mt-1 min-h-5 truncate text-xs text-zinc-500">{step.detail}</p>
+      <p className={`mt-3 text-xs font-semibold uppercase tracking-[0.12em] ${stepNumberClass}`}>Step {step.number}</p>
+      <p className={`mt-1 truncate text-sm font-semibold ${titleClass}`}>{step.title}</p>
+      <p className={`mt-1 min-h-5 truncate text-xs ${detailClass}`}>{step.detail}</p>
     </CardTag>
   );
 }
@@ -449,23 +458,23 @@ const statusLabels = {
 
 const statusStyles = {
   complete: {
-    icon: "border-emerald-300/20 bg-emerald-300/10 text-emerald-100",
-    badge: "border-emerald-300/20 bg-emerald-300/10 text-emerald-100",
+    icon: "border-emerald-200/35 bg-emerald-400/18 text-emerald-50",
+    badge: "border-emerald-200/35 bg-emerald-400/18 text-emerald-50",
   },
   current: {
-    icon: "border-teal-300/25 bg-teal-300/10 text-teal-100",
-    badge: "border-teal-300/25 bg-teal-300/10 text-teal-100",
+    icon: "border-cyan-200/45 bg-cyan-400/20 text-cyan-50",
+    badge: "border-cyan-200/45 bg-cyan-400/20 text-cyan-50",
   },
   ready: {
-    icon: "border-cyan-300/20 bg-cyan-300/10 text-cyan-100",
-    badge: "border-cyan-300/20 bg-cyan-300/10 text-cyan-100",
+    icon: "border-sky-200/35 bg-sky-400/18 text-sky-50",
+    badge: "border-sky-200/35 bg-sky-400/18 text-sky-50",
   },
   skipped: {
-    icon: "border-amber-300/20 bg-amber-300/10 text-amber-100",
-    badge: "border-amber-300/20 bg-amber-300/10 text-amber-100",
+    icon: "border-amber-200/35 bg-amber-400/18 text-amber-50",
+    badge: "border-amber-200/35 bg-amber-400/18 text-amber-50",
   },
   locked: {
-    icon: "border-zinc-500/20 bg-zinc-500/10 text-zinc-400",
-    badge: "border-zinc-500/20 bg-zinc-500/10 text-zinc-400",
+    icon: "border-slate-500/35 bg-slate-700/28 text-slate-200/80",
+    badge: "border-slate-500/35 bg-slate-700/28 text-slate-200/80",
   },
 };

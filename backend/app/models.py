@@ -111,6 +111,7 @@ class UpdateCleaningSettingsRequest(BaseModel):
 
 
 VOCAL_ENHANCER_PRESETS = [
+    "AI Pop Clean",
     "Natural Clean",
     "Pop Vocal",
     "Worship Lead",
@@ -233,7 +234,7 @@ class StemCleaningResult(BaseModel):
 
 class StemVocalEnhancementSettings(BaseModel):
     enabled: bool = False
-    preset: str = "Natural Clean"
+    preset: str = "AI Pop Clean"
     pitchCorrection: str = "Off"
     key: str = "Auto"
     scale: str = "Major"
@@ -243,14 +244,14 @@ class StemVocalEnhancementSettings(BaseModel):
     presenceAmount: float = 0
     airAmount: float = 0
     deEssAmount: float = 50
-    compressionAmount: float = 45
-    riderAmount: float = 45
-    saturationAmount: float = 50
-    doublerAmount: float = 50
+    compressionAmount: float = 40
+    riderAmount: float = 36
+    saturationAmount: float = 18
+    doublerAmount: float = 16
     breathReductionAmount: float = 35
     mouthClickReductionAmount: float = 30
-    pitchStrength: float = 50
-    pitchHumanize: float = 60
+    pitchStrength: float = 42
+    pitchHumanize: float = 72
     useEnhancedInMix: bool = True
 
 
@@ -262,7 +263,7 @@ class StemVocalEnhancementResult(BaseModel):
     sourceKind: str = "Original"
     enhancedFilePath: str | None = None
     enhancedFileUrl: str | None = None
-    preset: str = "Natural Clean"
+    preset: str = "AI Pop Clean"
     pitchCorrection: str = "Off"
     key: str = "Auto"
     scale: str = "Major"
@@ -272,14 +273,14 @@ class StemVocalEnhancementResult(BaseModel):
     presenceAmount: float = 0
     airAmount: float = 0
     deEssAmount: float = 50
-    compressionAmount: float = 45
-    riderAmount: float = 45
-    saturationAmount: float = 50
-    doublerAmount: float = 50
+    compressionAmount: float = 40
+    riderAmount: float = 36
+    saturationAmount: float = 18
+    doublerAmount: float = 16
     breathReductionAmount: float = 35
     mouthClickReductionAmount: float = 30
-    pitchStrength: float = 50
-    pitchHumanize: float = 60
+    pitchStrength: float = 42
+    pitchHumanize: float = 72
     peakDbfs: float | None = None
     rmsDbfs: float | None = None
     integratedLufs: float | None = None

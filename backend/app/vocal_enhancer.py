@@ -39,14 +39,14 @@ VOCAL_CONTROL_DEFAULTS = {
     "presenceAmount": 0,
     "airAmount": 0,
     "deEssAmount": 50,
-    "compressionAmount": 45,
-    "riderAmount": 45,
-    "saturationAmount": 50,
-    "doublerAmount": 50,
+    "compressionAmount": 40,
+    "riderAmount": 36,
+    "saturationAmount": 18,
+    "doublerAmount": 16,
     "breathReductionAmount": 35,
     "mouthClickReductionAmount": 30,
-    "pitchStrength": 50,
-    "pitchHumanize": 60,
+    "pitchStrength": 42,
+    "pitchHumanize": 72,
 }
 VOCAL_CONTROL_FIELDS = tuple(VOCAL_CONTROL_DEFAULTS.keys())
 VOCAL_SETTING_PATCH_FIELDS = (
@@ -538,7 +538,7 @@ def _run_vocal_enhancement_job(project_id: str, job_id: str) -> None:
                 "sourceKind": "Original",
                 "enhancedFilePath": None,
                 "enhancedFileUrl": None,
-                "preset": settings.get("preset", "Natural Clean"),
+                "preset": settings.get("preset", "AI Pop Clean"),
                 "pitchCorrection": settings.get("pitchCorrection", "Off"),
                 "key": settings.get("key", "Auto"),
                 "scale": settings.get("scale", "Major"),
@@ -548,14 +548,14 @@ def _run_vocal_enhancement_job(project_id: str, job_id: str) -> None:
                 "presenceAmount": float(settings.get("presenceAmount", 0)),
                 "airAmount": float(settings.get("airAmount", 0)),
                 "deEssAmount": float(settings.get("deEssAmount", 50)),
-                "compressionAmount": float(settings.get("compressionAmount", 45)),
-                "riderAmount": float(settings.get("riderAmount", 45)),
-                "saturationAmount": float(settings.get("saturationAmount", 50)),
-                "doublerAmount": float(settings.get("doublerAmount", 50)),
+                "compressionAmount": float(settings.get("compressionAmount", 40)),
+                "riderAmount": float(settings.get("riderAmount", 36)),
+                "saturationAmount": float(settings.get("saturationAmount", 18)),
+                "doublerAmount": float(settings.get("doublerAmount", 16)),
                 "breathReductionAmount": float(settings.get("breathReductionAmount", 35)),
                 "mouthClickReductionAmount": float(settings.get("mouthClickReductionAmount", 30)),
-                "pitchStrength": float(settings.get("pitchStrength", 50)),
-                "pitchHumanize": float(settings.get("pitchHumanize", 60)),
+                "pitchStrength": float(settings.get("pitchStrength", 42)),
+                "pitchHumanize": float(settings.get("pitchHumanize", 72)),
                 "peakDbfs": None,
                 "rmsDbfs": None,
                 "integratedLufs": None,
@@ -678,7 +678,7 @@ def _build_vocal_recommendation(stem: dict[str, Any], profile: dict[str, Any], s
 
     recommended: dict[str, float | str | bool] = {
         "enabled": True,
-        "preset": "Backing Vocal Wide" if is_backing else "Natural Clean",
+        "preset": "Backing Vocal Wide" if is_backing else "AI Pop Clean",
         "pitchCorrection": "Off",
         "key": estimated_key if key_confidence >= 55 else "Auto",
         "scale": estimated_scale if key_confidence >= 55 else "Major",
@@ -688,26 +688,24 @@ def _build_vocal_recommendation(stem: dict[str, Any], profile: dict[str, Any], s
         "presenceAmount": 0,
         "airAmount": 0,
         "deEssAmount": 50,
-        "compressionAmount": 50,
-        "riderAmount": 48,
-        "saturationAmount": 45,
-        "doublerAmount": 68 if is_backing else 35,
-        "breathReductionAmount": 44 if is_backing else 38,
+        "compressionAmount": 46 if is_backing else 42,
+        "riderAmount": 44 if is_backing else 38,
+        "saturationAmount": 28 if is_backing else 22,
+        "doublerAmount": 46 if is_backing else 12,
+        "breathReductionAmount": 42 if is_backing else 36,
         "mouthClickReductionAmount": 38,
-        "pitchStrength": 42,
-        "pitchHumanize": 76,
+        "pitchStrength": 38,
+        "pitchHumanize": 82,
         "useEnhancedInMix": True,
     }
 
-    if not is_backing and not issue_types:
-        recommended["preset"] = "Pop Vocal"
     if {"Noise", "Hiss", "Low Rumble"} & issue_types:
         recommended["preset"] = "Live Vocal Fix"
-        recommended["saturationAmount"] = 35
+        recommended["saturationAmount"] = 24
     elif {"Dull", "Thin"} & issue_types and not is_backing:
         recommended["preset"] = "Bright AI Polish"
     elif "Muddy" in issue_types and not is_backing:
-        recommended["preset"] = "Pop Vocal"
+        recommended["preset"] = "AI Pop Clean"
 
     if "Muddy" in issue_types:
         recommended["bodyAmount"] = -22
@@ -715,7 +713,7 @@ def _build_vocal_recommendation(stem: dict[str, Any], profile: dict[str, Any], s
         recommended["airAmount"] = 10
     if "Thin" in issue_types:
         recommended["bodyAmount"] = max(float(recommended["bodyAmount"]), 18)
-        recommended["saturationAmount"] = 62
+        recommended["saturationAmount"] = max(float(recommended["saturationAmount"]), 34)
     if "Dull" in issue_types:
         recommended["presenceAmount"] = max(float(recommended["presenceAmount"]), 18)
         recommended["airAmount"] = max(float(recommended["airAmount"]), 22)
@@ -728,19 +726,20 @@ def _build_vocal_recommendation(stem: dict[str, Any], profile: dict[str, Any], s
     if "Low Rumble" in issue_types and "Thin" not in issue_types:
         recommended["bodyAmount"] = min(float(recommended["bodyAmount"]), -10)
     if "Uneven Level" in issue_types:
-        recommended["compressionAmount"] = 74
-        recommended["riderAmount"] = 78
+        recommended["compressionAmount"] = 60
+        recommended["riderAmount"] = 58
     if "Too Quiet" in issue_types:
-        recommended["compressionAmount"] = max(float(recommended["compressionAmount"]), 68)
-        recommended["riderAmount"] = max(float(recommended["riderAmount"]), 72)
+        recommended["compressionAmount"] = max(float(recommended["compressionAmount"]), 56)
+        recommended["riderAmount"] = max(float(recommended["riderAmount"]), 54)
     if "Too Loud" in issue_types or "Clipping" in issue_types:
-        recommended["compressionAmount"] = min(float(recommended["compressionAmount"]), 58)
-        recommended["saturationAmount"] = min(float(recommended["saturationAmount"]), 34)
+        recommended["compressionAmount"] = min(float(recommended["compressionAmount"]), 52)
+        recommended["riderAmount"] = min(float(recommended["riderAmount"]), 48)
+        recommended["saturationAmount"] = min(float(recommended["saturationAmount"]), 18)
 
     if harmonic > 0.56 and "Noise" not in issue_types and "Silence" not in issue_types:
         recommended["pitchCorrection"] = "Natural"
-        recommended["pitchStrength"] = 35 if is_backing else 42
-        recommended["pitchHumanize"] = 82 if is_backing else 76
+        recommended["pitchStrength"] = 30 if is_backing else 34
+        recommended["pitchHumanize"] = 86 if is_backing else 84
     if "Hiss" in issue_types or "Noise" in issue_types:
         recommended["breathReductionAmount"] = 55
         recommended["mouthClickReductionAmount"] = 45
@@ -854,19 +853,20 @@ def _build_vocal_quality_doctor(stem: dict[str, Any], project: dict[str, Any], p
 
     if source_peak > -0.6 or profile.get("clippingDetected"):
         add_problem("Clipped Source", "High", "The vocal source is close to clipping; aggressive compression, saturation, or air boosts can make distortion more obvious.", 14)
-        recommended["compressionAmount"] = min(float(settings.get("compressionAmount", 45)), 58)
-        recommended["saturationAmount"] = min(float(settings.get("saturationAmount", 50)), 34)
+        recommended["compressionAmount"] = min(float(settings.get("compressionAmount", 40)), 52)
+        recommended["riderAmount"] = min(float(settings.get("riderAmount", 36)), 48)
+        recommended["saturationAmount"] = min(float(settings.get("saturationAmount", 18)), 18)
     if source_lufs > -12:
         add_problem("Too Hot", "Medium", "The vocal is already loud, so extra compression can flatten it.", 8)
-        recommended["compressionAmount"] = min(float(settings.get("compressionAmount", 45)), 58)
-        recommended["riderAmount"] = min(float(settings.get("riderAmount", 45)), 62)
+        recommended["compressionAmount"] = min(float(settings.get("compressionAmount", 40)), 52)
+        recommended["riderAmount"] = min(float(settings.get("riderAmount", 36)), 48)
     if source_lufs < -30:
         add_problem("Too Quiet", "Medium", "The vocal is low before processing and may fall behind the band.", 8)
-        recommended["compressionAmount"] = max(float(settings.get("compressionAmount", 45)), 68)
-        recommended["riderAmount"] = max(float(settings.get("riderAmount", 45)), 74)
+        recommended["compressionAmount"] = max(float(settings.get("compressionAmount", 40)), 56)
+        recommended["riderAmount"] = max(float(settings.get("riderAmount", 36)), 54)
     if noise_floor > -45 or flatness > 0.09:
         add_problem("Noisy", "High", "Noise or hiss is elevated; bright effects can exaggerate it.", 13)
-        recommended.update({"preset": "Live Vocal Fix", "fxAmount": min(float(settings.get("fxAmount", 0)), 18), "saturationAmount": min(float(settings.get("saturationAmount", 50)), 36)})
+        recommended.update({"preset": "Live Vocal Fix", "fxAmount": min(float(settings.get("fxAmount", 0)), 18), "saturationAmount": min(float(settings.get("saturationAmount", 18)), 24)})
     if silence > 55:
         add_problem("Long Silence", "Low", "The file contains a lot of silence; keep alignment, but check that the vocal sections are actually present.", 4)
 
@@ -890,18 +890,18 @@ def _build_vocal_quality_doctor(stem: dict[str, Any], project: dict[str, Any], p
     if body < 0.08 and centroid > 1800:
         add_problem("Thin", "Medium", "The vocal has little body compared with its brightness.", 7)
         recommended["bodyAmount"] = max(float(settings.get("bodyAmount", 0)), 18)
-        recommended["saturationAmount"] = max(float(settings.get("saturationAmount", 50)), 58)
+        recommended["saturationAmount"] = max(float(settings.get("saturationAmount", 18)), 34)
 
     if settings.get("pitchCorrection") == "Strong":
         add_problem("Heavy Pitch", "Medium", "Strong pitch polish can sound artificial on live or expressive vocals.", 8)
-        recommended.update({"pitchCorrection": "Natural", "pitchStrength": 42, "pitchHumanize": 82})
+        recommended.update({"pitchCorrection": "Natural", "pitchStrength": 34, "pitchHumanize": 84})
     if settings.get("fxStyle") != "Dry" and float(settings.get("fxAmount", 0)) > 0:
         add_problem("Printed FX", "Medium", "This enhanced vocal already prints ambience, and the mixer adds space again, so the vocal can lose focus.", 7)
         recommended["fxStyle"] = "Dry"
         recommended["fxAmount"] = 0
-    if not is_backing and float(settings.get("doublerAmount", 50)) > 35:
+    if not is_backing and float(settings.get("doublerAmount", 16)) > 24:
         add_problem("Lead Too Wide", "Medium", "The lead vocal doubler is high; this can pull the lead away from the center.", 8)
-        recommended["doublerAmount"] = 18
+        recommended["doublerAmount"] = 10
     if float(settings.get("fxAmount", 0)) > 48:
         add_problem("Too Wet", "Medium", "Vocal FX amount is high and may blur words in the mix.", 8)
         recommended["fxStyle"] = "Dry"
@@ -910,9 +910,9 @@ def _build_vocal_quality_doctor(stem: dict[str, Any], project: dict[str, Any], p
         add_problem("Wide Lead FX", "Medium", "Worship Wide is lush, but it can push a lead vocal behind the band.", 7)
         recommended["fxStyle"] = "Dry"
         recommended["fxAmount"] = 0
-    if float(settings.get("compressionAmount", 45)) > 82:
+    if float(settings.get("compressionAmount", 40)) > 72:
         add_problem("Overcompressed", "Medium", "Very high vocal compression can reduce emotion and add pumping.", 7)
-        recommended["compressionAmount"] = 66
+        recommended["compressionAmount"] = 58
     if float(settings.get("airAmount", 0)) > 32 and sibilance > 0.1:
         add_problem("Air Too Sharp", "Medium", "Air boost is high for a sibilant vocal.", 7)
         recommended["airAmount"] = -6
@@ -1025,7 +1025,7 @@ def _ensure_vocal_settings(stem: dict[str, Any]) -> dict[str, Any]:
         "vocalEnhancementSettings",
         {
             "enabled": False,
-            "preset": "Natural Clean",
+            "preset": "AI Pop Clean",
             "pitchCorrection": "Off",
             "key": "Auto",
             "scale": "Major",
@@ -1035,19 +1035,19 @@ def _ensure_vocal_settings(stem: dict[str, Any]) -> dict[str, Any]:
             "presenceAmount": 0,
             "airAmount": 0,
             "deEssAmount": 50,
-            "compressionAmount": 45,
-            "riderAmount": 45,
-            "saturationAmount": 50,
-            "doublerAmount": 50,
+            "compressionAmount": 40,
+            "riderAmount": 36,
+            "saturationAmount": 18,
+            "doublerAmount": 16,
             "breathReductionAmount": 35,
             "mouthClickReductionAmount": 30,
-            "pitchStrength": 50,
-            "pitchHumanize": 60,
+            "pitchStrength": 42,
+            "pitchHumanize": 72,
             "useEnhancedInMix": True,
         },
     )
     settings.setdefault("enabled", False)
-    settings.setdefault("preset", "Natural Clean")
+    settings.setdefault("preset", "AI Pop Clean")
     settings.setdefault("pitchCorrection", "Off")
     settings.setdefault("key", "Auto")
     settings.setdefault("scale", "Major")
@@ -1057,14 +1057,14 @@ def _ensure_vocal_settings(stem: dict[str, Any]) -> dict[str, Any]:
     settings.setdefault("presenceAmount", 0)
     settings.setdefault("airAmount", 0)
     settings.setdefault("deEssAmount", 50)
-    settings.setdefault("compressionAmount", 45)
-    settings.setdefault("riderAmount", 45)
-    settings.setdefault("saturationAmount", 50)
-    settings.setdefault("doublerAmount", 50)
+    settings.setdefault("compressionAmount", 40)
+    settings.setdefault("riderAmount", 36)
+    settings.setdefault("saturationAmount", 18)
+    settings.setdefault("doublerAmount", 16)
     settings.setdefault("breathReductionAmount", 35)
     settings.setdefault("mouthClickReductionAmount", 30)
-    settings.setdefault("pitchStrength", 50)
-    settings.setdefault("pitchHumanize", 60)
+    settings.setdefault("pitchStrength", 42)
+    settings.setdefault("pitchHumanize", 72)
     settings.setdefault("useEnhancedInMix", True)
     stem.setdefault("vocalEnhancementStatus", "Not Enhanced")
     stem.setdefault("vocalEnhancementResult", None)
@@ -1122,7 +1122,7 @@ def _build_enhancement_report(
     after_lufs = enhanced_metrics.get("integratedLufs")
     before_peak = original_metrics.get("peakDbfs")
     after_peak = enhanced_metrics.get("peakDbfs")
-    summary_parts = [f"{settings.get('preset', 'Natural Clean')} rendered"]
+    summary_parts = [f"{settings.get('preset', 'AI Pop Clean')} rendered"]
     if isinstance(before_lufs, (int, float)) and isinstance(after_lufs, (int, float)):
         summary_parts.append(f"LUFS {before_lufs:.1f} -> {after_lufs:.1f}")
     if isinstance(before_peak, (int, float)) and isinstance(after_peak, (int, float)):

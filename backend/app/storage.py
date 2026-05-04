@@ -430,7 +430,7 @@ def _mark_interrupted_vocal_stems(project: dict[str, Any]) -> None:
     for stem in project.get("stems", []):
         settings = stem.setdefault("vocalEnhancementSettings", {})
         settings.setdefault("enabled", False)
-        settings.setdefault("preset", "Natural Clean")
+        settings.setdefault("preset", "AI Pop Clean")
         settings.setdefault("pitchCorrection", "Off")
         settings.setdefault("key", "Auto")
         settings.setdefault("scale", "Major")
@@ -440,14 +440,14 @@ def _mark_interrupted_vocal_stems(project: dict[str, Any]) -> None:
         settings.setdefault("presenceAmount", 0)
         settings.setdefault("airAmount", 0)
         settings.setdefault("deEssAmount", 50)
-        settings.setdefault("compressionAmount", 45)
-        settings.setdefault("riderAmount", 45)
-        settings.setdefault("saturationAmount", 50)
-        settings.setdefault("doublerAmount", 50)
+        settings.setdefault("compressionAmount", 40)
+        settings.setdefault("riderAmount", 36)
+        settings.setdefault("saturationAmount", 18)
+        settings.setdefault("doublerAmount", 16)
         settings.setdefault("breathReductionAmount", 35)
         settings.setdefault("mouthClickReductionAmount", 30)
-        settings.setdefault("pitchStrength", 50)
-        settings.setdefault("pitchHumanize", 60)
+        settings.setdefault("pitchStrength", 42)
+        settings.setdefault("pitchHumanize", 72)
         settings.setdefault("useEnhancedInMix", True)
         result = stem.get("vocalEnhancementResult") or {}
         result_matches = (
@@ -475,14 +475,14 @@ def _vocal_result_controls_match(result: dict[str, Any], settings: dict[str, Any
         "presenceAmount": 0,
         "airAmount": 0,
         "deEssAmount": 50,
-        "compressionAmount": 45,
-        "riderAmount": 45,
-        "saturationAmount": 50,
-        "doublerAmount": 50,
+        "compressionAmount": 40,
+        "riderAmount": 36,
+        "saturationAmount": 18,
+        "doublerAmount": 16,
         "breathReductionAmount": 35,
         "mouthClickReductionAmount": 30,
-        "pitchStrength": 50,
-        "pitchHumanize": 60,
+        "pitchStrength": 42,
+        "pitchHumanize": 72,
     }
     return all(float(result.get(key, default)) == float(settings.get(key, default)) for key, default in defaults.items())
 
@@ -722,7 +722,7 @@ def _ensure_project_defaults(project: dict[str, Any]) -> None:
             "vocalEnhancementSettings",
             {
                 "enabled": False,
-                "preset": "Natural Clean",
+                "preset": "AI Pop Clean",
                 "pitchCorrection": "Off",
                 "key": "Auto",
                 "scale": "Major",
@@ -732,17 +732,17 @@ def _ensure_project_defaults(project: dict[str, Any]) -> None:
                 "presenceAmount": 0,
                 "airAmount": 0,
                 "deEssAmount": 50,
-                "compressionAmount": 45,
-                "riderAmount": 45,
-                "saturationAmount": 50,
-                "doublerAmount": 50,
-                "pitchStrength": 50,
-                "pitchHumanize": 60,
+                "compressionAmount": 40,
+                "riderAmount": 36,
+                "saturationAmount": 18,
+                "doublerAmount": 16,
+                "pitchStrength": 42,
+                "pitchHumanize": 72,
                 "useEnhancedInMix": True,
             },
         )
         stem["vocalEnhancementSettings"].setdefault("enabled", False)
-        stem["vocalEnhancementSettings"].setdefault("preset", "Natural Clean")
+        stem["vocalEnhancementSettings"].setdefault("preset", "AI Pop Clean")
         stem["vocalEnhancementSettings"].setdefault("pitchCorrection", "Off")
         stem["vocalEnhancementSettings"].setdefault("key", "Auto")
         stem["vocalEnhancementSettings"].setdefault("scale", "Major")
@@ -752,14 +752,14 @@ def _ensure_project_defaults(project: dict[str, Any]) -> None:
         stem["vocalEnhancementSettings"].setdefault("presenceAmount", 0)
         stem["vocalEnhancementSettings"].setdefault("airAmount", 0)
         stem["vocalEnhancementSettings"].setdefault("deEssAmount", 50)
-        stem["vocalEnhancementSettings"].setdefault("compressionAmount", 45)
-        stem["vocalEnhancementSettings"].setdefault("riderAmount", 45)
-        stem["vocalEnhancementSettings"].setdefault("saturationAmount", 50)
-        stem["vocalEnhancementSettings"].setdefault("doublerAmount", 50)
+        stem["vocalEnhancementSettings"].setdefault("compressionAmount", 40)
+        stem["vocalEnhancementSettings"].setdefault("riderAmount", 36)
+        stem["vocalEnhancementSettings"].setdefault("saturationAmount", 18)
+        stem["vocalEnhancementSettings"].setdefault("doublerAmount", 16)
         stem["vocalEnhancementSettings"].setdefault("breathReductionAmount", 35)
         stem["vocalEnhancementSettings"].setdefault("mouthClickReductionAmount", 30)
-        stem["vocalEnhancementSettings"].setdefault("pitchStrength", 50)
-        stem["vocalEnhancementSettings"].setdefault("pitchHumanize", 60)
+        stem["vocalEnhancementSettings"].setdefault("pitchStrength", 42)
+        stem["vocalEnhancementSettings"].setdefault("pitchHumanize", 72)
         stem["vocalEnhancementSettings"].setdefault("useEnhancedInMix", True)
         stem.setdefault("vocalEnhancementStatus", "Not Enhanced")
         stem.setdefault("vocalEnhancementResult", None)
