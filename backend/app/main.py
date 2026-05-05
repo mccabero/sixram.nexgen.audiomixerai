@@ -90,13 +90,14 @@ from .stem_detection import (
     get_detection_memory_summary,
     learn_stem_type_correction,
 )
-from .storage import abandon_processing_job, create_project, delete_project, delete_stem, get_project, list_projects, mark_interrupted_jobs, read_project_logs, save_uploaded_stems, update_project, update_stem_type
+from .storage import abandon_processing_job, create_project, delete_project, delete_stem, get_project, list_projects, mark_interrupted_jobs, read_project_logs, request_processing_job_cancel, save_uploaded_stems, update_project, update_stem_type
 from .recording import recording_manager
 from .video_editor import (
     apply_branding_template,
     create_branding_template,
     create_video_preview_job,
     create_video_render_job,
+    cancel_video_render_job,
     delete_raw_video,
     delete_branding_template,
     delete_video_export,
@@ -309,6 +310,11 @@ def api_get_video_export_job(project_id: str, job_id: str) -> ProcessingJob:
     return get_video_render_job(project_id, job_id)
 
 
+@app.post("/api/projects/{project_id}/video-editor/jobs/{job_id}/cancel", response_model=ProcessingJob)
+def api_cancel_video_export_job(project_id: str, job_id: str) -> ProcessingJob:
+    return cancel_video_render_job(project_id, job_id)
+
+
 @app.delete("/api/projects/{project_id}/video-editor/exports/{export_id}", response_model=VideoEditorStateResponse)
 def api_delete_video_export(project_id: str, export_id: str) -> VideoEditorStateResponse:
     return delete_video_export(project_id, export_id)
@@ -457,6 +463,14 @@ def api_get_processing_job(project_id: str, job_id: str) -> ProcessingJob:
 @app.post("/api/projects/{project_id}/jobs/{job_id}/abandon", response_model=ProcessingJob)
 def api_abandon_processing_job(project_id: str, job_id: str) -> ProcessingJob:
     return abandon_processing_job(project_id, job_id)
+
+
+@app.post("/api/projects/{project_id}/jobs/{job_id}/cancel", response_model=ProcessingJob)
+def api_cancel_processing_job(project_id: str, job_id: str) -> ProcessingJob:
+    job = get_processing_job(project_id, job_id)
+    if job.type in {"Video Export", "Video Preview"}:
+        return cancel_video_render_job(project_id, job_id)
+    return request_processing_job_cancel(project_id, job_id)
 
 
 @app.post("/api/projects/{project_id}/auto-balance", response_model=Project)

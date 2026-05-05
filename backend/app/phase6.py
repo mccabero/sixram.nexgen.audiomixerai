@@ -12,7 +12,17 @@ from fastapi import HTTPException
 from .audio_engine import ensure_audio_environment, export_audio_file, master_audio_file
 from .logging_utils import append_project_log, utc_now_iso
 from .models import ExportFile, ExportMixRequest, GenerateMasterRequest, MasterVersion, ProcessingJob, Project, ProjectBackupRequest, UpdateMasteringControlsRequest
-from .storage import display_path, ensure_project_dirs, project_subdirs, resolve_stored_file_path, store, _find_project
+from .storage import (
+    JobCancelled,
+    display_path,
+    ensure_project_dirs,
+    mark_processing_job_cancelled,
+    project_subdirs,
+    raise_if_processing_job_cancelled,
+    resolve_stored_file_path,
+    store,
+    _find_project,
+)
 
 
 MASTERING_PRESETS: dict[str, dict[str, Any]] = {
@@ -32,7 +42,7 @@ OUTPUT_FORMATS: dict[str, dict[str, str]] = {
 }
 
 TRUE_PEAK_CEILING_DB = -1.0
-ACTIVE_JOB_STATUSES = {"Pending", "Processing"}
+ACTIVE_JOB_STATUSES = {"Pending", "Processing", "Cancelling"}
 RUNNING_MASTERING_JOB_IDS: set[str] = set()
 RUNNING_MASTERING_JOB_LOCK = threading.Lock()
 
@@ -129,6 +139,8 @@ def run_mastering_job(project_id: str, job_id: str, payload: GenerateMasterReque
 
     try:
         _run_mastering_job(project_id, job_id, payload)
+    except JobCancelled:
+        mark_processing_job_cancelled(project_id, job_id)
     finally:
         with RUNNING_MASTERING_JOB_LOCK:
             RUNNING_MASTERING_JOB_IDS.discard(job_id)
@@ -147,6 +159,7 @@ def _run_mastering_job(project_id: str, job_id: str, payload: GenerateMasterRequ
                 message=message,
             ),
         )
+        raise_if_processing_job_cancelled(project_id, job_id)
         _update_job(project_id, job_id, progress=96, message=f"Saving {master.label}.")
         now = utc_now_iso()
         data = store.load()
@@ -160,6 +173,8 @@ def _run_mastering_job(project_id: str, job_id: str, payload: GenerateMasterRequ
         job["completedAt"] = now
         store.save(data)
         append_project_log(project_subdirs(project_id)["logs"], f"Mastering job {job_id} completed.")
+    except JobCancelled:
+        raise
     except Exception as exc:
         error_message = _error_detail(exc) or "Mastering failed."
         now = utc_now_iso()
@@ -418,6 +433,8 @@ def _update_job(project_id: str, job_id: str, **updates: Any) -> None:
     data = store.load()
     project = _find_project(data, project_id)
     job = _find_job(project, job_id)
+    if job.get("status") in {"Cancelling", "Cancelled"}:
+        raise JobCancelled(job.get("message") or "Job was stopped by the user.")
     job.update(updates)
     job["updatedAt"] = utc_now_iso()
     store.save(data)

@@ -71,6 +71,15 @@ class JsonStore:
 
 store = JsonStore()
 STEM_TYPE_MEMORY_VALUES = set(STEM_TYPES) - {"Unknown"}
+ACTIVE_PROCESSING_JOB_STATUSES = {"Pending", "Processing", "Cancelling"}
+
+
+class JobCancelled(Exception):
+    """Raised inside background workers when the user requests a stop."""
+
+    def __init__(self, message: str = "Job was stopped by the user.") -> None:
+        super().__init__(message)
+        self.message = message
 
 
 def project_dir(project_id: str) -> Path:
@@ -169,7 +178,7 @@ def delete_project(project_id: str) -> dict[str, str]:
         raise HTTPException(status_code=404, detail="Project not found.")
 
     project = projects[index]
-    active_job = next((job for job in project.get("processingJobs", []) if job.get("status") in {"Pending", "Processing"}), None)
+    active_job = next((job for job in project.get("processingJobs", []) if job.get("status") in ACTIVE_PROCESSING_JOB_STATUSES), None)
     if active_job:
         raise HTTPException(status_code=400, detail="Stop or abandon running jobs before deleting this project.")
 
@@ -357,7 +366,7 @@ def mark_interrupted_jobs() -> int:
         _ensure_project_defaults(project)
         logs_dir = project_subdirs(project["id"])["logs"]
         for job in project.get("processingJobs", []):
-            if job.get("status") in {"Pending", "Processing"}:
+            if job.get("status") in ACTIVE_PROCESSING_JOB_STATUSES:
                 job["status"] = "Failed"
                 job["progress"] = 100
                 job["currentStemId"] = None
@@ -384,7 +393,7 @@ def abandon_processing_job(project_id: str, job_id: str) -> ProcessingJob:
     if job is None:
         raise HTTPException(status_code=404, detail="Processing job not found.")
 
-    if job.get("status") not in {"Pending", "Processing"}:
+    if job.get("status") not in ACTIVE_PROCESSING_JOB_STATUSES:
         return ProcessingJob(**job)
 
     now = utc_now_iso()
@@ -403,6 +412,67 @@ def abandon_processing_job(project_id: str, job_id: str) -> ProcessingJob:
         _mark_interrupted_vocal_stems(project)
     store.save(data)
     append_project_log(project_subdirs(project_id)["logs"], f"Marked {job.get('type', 'processing')} job {job_id} as failed for retry.")
+    return ProcessingJob(**job)
+
+
+def request_processing_job_cancel(project_id: str, job_id: str) -> ProcessingJob:
+    data = store.load()
+    project = _find_project(data, project_id)
+    job = next((item for item in project.get("processingJobs", []) if item.get("id") == job_id), None)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Processing job not found.")
+
+    if job.get("status") not in ACTIVE_PROCESSING_JOB_STATUSES:
+        return ProcessingJob(**job)
+
+    if job.get("status") == "Cancelling":
+        return ProcessingJob(**job)
+
+    now = utc_now_iso()
+    job["status"] = "Cancelling"
+    job["message"] = "Stop requested. Finishing the current safe checkpoint..."
+    job["updatedAt"] = now
+    project["updatedAt"] = now
+    store.save(data)
+    append_project_log(project_subdirs(project_id)["logs"], f"Stop requested for {job.get('type', 'processing')} job {job_id}.")
+    return ProcessingJob(**job)
+
+
+def raise_if_processing_job_cancelled(project_id: str, job_id: str) -> None:
+    data = store.load()
+    project = _find_project(data, project_id)
+    job = next((item for item in project.get("processingJobs", []) if item.get("id") == job_id), None)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Processing job not found.")
+    if job.get("status") in {"Cancelling", "Cancelled"}:
+        raise JobCancelled(job.get("message") or "Job was stopped by the user.")
+
+
+def mark_processing_job_cancelled(project_id: str, job_id: str) -> ProcessingJob:
+    data = store.load()
+    project = _find_project(data, project_id)
+    job = next((item for item in project.get("processingJobs", []) if item.get("id") == job_id), None)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Processing job not found.")
+
+    if job.get("status") == "Cancelled":
+        return ProcessingJob(**job)
+
+    now = utc_now_iso()
+    message = "Job stopped by user."
+    job["status"] = "Cancelled"
+    job["progress"] = 100
+    job["currentStemId"] = None
+    job["message"] = message
+    job["updatedAt"] = now
+    job["completedAt"] = now
+    project["updatedAt"] = now
+    if job.get("type") == "Cleaning":
+        _mark_interrupted_cleaning_stems(project)
+    if job.get("type") == "Vocal Enhancement":
+        _mark_interrupted_vocal_stems(project)
+    store.save(data)
+    append_project_log(project_subdirs(project_id)["logs"], f"Stopped {job.get('type', 'processing')} job {job_id}.")
     return ProcessingJob(**job)
 
 

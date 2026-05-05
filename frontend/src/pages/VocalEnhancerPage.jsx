@@ -6,6 +6,7 @@ import {
   applyAllVocalRecommendations,
   applyVocalDoctorFix,
   applyVocalRecommendation,
+  cancelProcessingJob,
   createCustomVocalPreset,
   deleteCustomVocalPreset,
   deleteVocalEnhancements,
@@ -25,7 +26,7 @@ import WaveformPreview from "../components/WaveformPreview.jsx";
 import WorkflowGuide from "../components/WorkflowGuide.jsx";
 import { formatDb, formatLufs } from "../utils/format.js";
 
-const runningStatuses = new Set(["Pending", "Processing"]);
+const runningStatuses = new Set(["Pending", "Processing", "Cancelling"]);
 const vocalTypes = new Set(["Lead Vocal", "Backing Vocal"]);
 const defaultOptions = {
   presets: ["AI Pop Clean", "Natural Clean", "Pop Vocal", "Worship Lead", "Live Vocal Fix", "Bright AI Polish", "Warm Ballad", "Backing Vocal Wide"],
@@ -57,6 +58,7 @@ export default function VocalEnhancerPage() {
   const [job, setJob] = useState(null);
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState("");
+  const [stoppingJobId, setStoppingJobId] = useState("");
   const [busyStemId, setBusyStemId] = useState("");
   const [error, setError] = useState("");
 
@@ -137,6 +139,19 @@ export default function VocalEnhancerPage() {
       setError(err.message);
     } finally {
       setActionLoading("");
+    }
+  };
+
+  const stopEnhancement = async () => {
+    if (!job?.id || job.status === "Cancelling") return;
+    setStoppingJobId(job.id);
+    setError("");
+    try {
+      setJob(await cancelProcessingJob(projectId, job.id));
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setStoppingJobId("");
     }
   };
 
@@ -274,7 +289,15 @@ export default function VocalEnhancerPage() {
   }
 
   const actionPanel = running
-    ? { title: "Enhancing Vocals", message: job?.message || "Processing enabled vocal stems.", progress: job?.progress || 0 }
+    ? {
+        title: job?.status === "Cancelling" ? "Stopping Vocal Enhancement" : "Enhancing Vocals",
+        message: job?.message || "Processing enabled vocal stems.",
+        progress: job?.progress || 0,
+        actionLabel: "Stop Enhancement",
+        actionBusy: stoppingJobId === job?.id || job?.status === "Cancelling",
+        actionDisabled: stoppingJobId === job?.id || job?.status === "Cancelling",
+        onAction: stopEnhancement,
+      }
     : actionLoading === "refresh"
       ? { title: "Refreshing Vocal Enhancer", message: "Reading latest vocal enhancement metadata." }
       : actionLoading === "analyze-vocals"

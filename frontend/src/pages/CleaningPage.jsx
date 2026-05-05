@@ -1,7 +1,7 @@
 import { AlertTriangle, ArrowLeft, CheckCircle2, Eraser, Gauge, Power, RefreshCw, SlidersHorizontal, Sparkles, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { deleteCleanedStems, getProcessingJob, getProject, startCleaning, updateCleaningSettings } from "../api.js";
+import { cancelProcessingJob, deleteCleanedStems, getProcessingJob, getProject, startCleaning, updateCleaningSettings } from "../api.js";
 import Button from "../components/Button.jsx";
 import EmptyState from "../components/EmptyState.jsx";
 import ProcessingPanel from "../components/ProcessingPanel.jsx";
@@ -11,7 +11,7 @@ import WorkflowGuide from "../components/WorkflowGuide.jsx";
 import { CLEANING_MODES, HUM_FREQUENCIES } from "../constants.js";
 import { formatDb, formatLufs, formatPercent } from "../utils/format.js";
 
-const runningStatuses = new Set(["Pending", "Processing"]);
+const runningStatuses = new Set(["Pending", "Processing", "Cancelling"]);
 const STALE_JOB_MS = 30 * 60 * 1000;
 const cleaningGridColumns = "xl:grid-cols-[minmax(220px,1fr)_120px_130px_130px_90px_120px_minmax(330px,1.15fr)_minmax(320px,1fr)]";
 
@@ -21,6 +21,7 @@ export default function CleaningPage() {
   const [job, setJob] = useState(null);
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState("");
+  const [stoppingJobId, setStoppingJobId] = useState("");
   const [busyStemId, setBusyStemId] = useState("");
   const [error, setError] = useState("");
 
@@ -120,6 +121,19 @@ export default function CleaningPage() {
     }
   };
 
+  const stopCleaning = async () => {
+    if (!job?.id || job.status === "Cancelling") return;
+    setStoppingJobId(job.id);
+    setError("");
+    try {
+      setJob(await cancelProcessingJob(projectId, job.id));
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setStoppingJobId("");
+    }
+  };
+
   const removeCleanedStems = async () => {
     if (!window.confirm("Delete cleaned stem files and downstream vocal/mix/master outputs? Original stems and cleaning settings are kept.")) return;
     setActionLoading("deleteCleaned");
@@ -162,7 +176,15 @@ export default function CleaningPage() {
   }
 
   const actionPanel = running
-    ? { title: "Cleaning Stems", message: job?.message || "Processing enabled stems.", progress: job?.progress || 0 }
+    ? {
+        title: job?.status === "Cancelling" ? "Stopping Cleaning" : "Cleaning Stems",
+        message: job?.message || "Processing enabled stems.",
+        progress: job?.progress || 0,
+        actionLabel: "Stop Cleaning",
+        actionBusy: stoppingJobId === job?.id || job?.status === "Cancelling",
+        actionDisabled: stoppingJobId === job?.id || job?.status === "Cancelling",
+        onAction: stopCleaning,
+      }
     : actionLoading === "refresh"
       ? { title: "Refreshing Cleaning", message: "Reading the latest cleaning metadata." }
       : actionLoading === "clean"

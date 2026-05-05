@@ -1,5 +1,6 @@
 import re
 import subprocess
+import threading
 import uuid
 from datetime import datetime, timezone
 from copy import deepcopy
@@ -16,12 +17,25 @@ from .audio_engine import ensure_audio_environment
 from .config import ALLOWED_VIDEO_EXTENSIONS, ALLOWED_VIDEO_LOGO_EXTENSIONS, BASE_DIR, MAX_VIDEO_LOGO_UPLOAD_BYTES, MAX_VIDEO_UPLOAD_BYTES
 from .logging_utils import append_project_log, utc_now_iso
 from .models import ProcessingJob, VideoWaveformStateResponse, UpdateVideoEditorSettingsRequest, VideoEditorStateResponse
-from .storage import display_path, ensure_project_dirs, project_subdirs, resolve_stored_file_path, store, _find_project
+from .storage import (
+    JobCancelled,
+    display_path,
+    ensure_project_dirs,
+    mark_processing_job_cancelled,
+    project_subdirs,
+    raise_if_processing_job_cancelled,
+    request_processing_job_cancel,
+    resolve_stored_file_path,
+    store,
+    _find_project,
+)
 
 
-ACTIVE_JOB_STATUSES = {"Pending", "Processing"}
+ACTIVE_JOB_STATUSES = {"Pending", "Processing", "Cancelling"}
 VIDEO_JOB_TYPE = "Video Export"
 VIDEO_PREVIEW_JOB_TYPE = "Video Preview"
+ACTIVE_VIDEO_PROCESSES: dict[str, subprocess.Popen] = {}
+ACTIVE_VIDEO_PROCESSES_LOCK = threading.Lock()
 AUDIO_ALIGN_SAMPLE_RATE = 8000
 AUDIO_ALIGN_MAX_SECONDS = 90
 EXPORT_PRESETS: dict[str, dict[str, Any]] = {
@@ -512,6 +526,12 @@ def get_video_render_job(project_id: str, job_id: str) -> ProcessingJob:
     return ProcessingJob(**_find_job(project, job_id))
 
 
+def cancel_video_render_job(project_id: str, job_id: str) -> ProcessingJob:
+    job = request_processing_job_cancel(project_id, job_id)
+    _terminate_video_process(job_id)
+    return job
+
+
 def delete_video_export(project_id: str, export_id: str) -> VideoEditorStateResponse:
     data = store.load()
     project = _find_project(data, project_id)
@@ -541,6 +561,8 @@ def delete_video_export(project_id: str, export_id: str) -> VideoEditorStateResp
 def run_video_render_job(project_id: str, job_id: str) -> None:
     try:
         _run_video_job(project_id, job_id, preview_mode=False)
+    except JobCancelled:
+        mark_processing_job_cancelled(project_id, job_id)
     except Exception as exc:
         error_message = _error_detail(exc) or "Video render failed."
         now = utc_now_iso()
@@ -561,6 +583,8 @@ def run_video_render_job(project_id: str, job_id: str) -> None:
 def run_video_preview_job(project_id: str, job_id: str) -> None:
     try:
         _run_video_job(project_id, job_id, preview_mode=True)
+    except JobCancelled:
+        mark_processing_job_cancelled(project_id, job_id)
     except Exception as exc:
         error_message = _error_detail(exc) or "Video preview failed."
         now = utc_now_iso()
@@ -612,6 +636,8 @@ def _run_video_job(project_id: str, job_id: str, preview_mode: bool) -> None:
         audio_path=audio_path,
         output_path=output_path,
         settings=render_settings,
+        job_id=job_id,
+        should_cancel=lambda: _video_job_cancel_requested(project_id, job_id),
         progress_callback=lambda fraction, message: _update_job(
             project_id,
             job_id,
@@ -620,6 +646,7 @@ def _run_video_job(project_id: str, job_id: str, preview_mode: bool) -> None:
         ),
     )
 
+    raise_if_processing_job_cancelled(project_id, job_id)
     _update_job(project_id, job_id, progress=96, message=f"Saving video {mode_label} metadata.")
     metadata = _probe_video(output_path)
     now = utc_now_iso()
@@ -664,6 +691,9 @@ def _run_video_job(project_id: str, job_id: str, preview_mode: bool) -> None:
     data = store.load()
     project = _find_project(data, project_id)
     settings = _ensure_video_editor_settings(project)
+    job = _find_job(project, job_id)
+    if job.get("status") in {"Cancelling", "Cancelled"}:
+        raise JobCancelled(job.get("message") or "Job was stopped by the user.")
     if preview_mode:
         settings["previewRender"] = render_record
     else:
@@ -672,7 +702,6 @@ def _run_video_job(project_id: str, job_id: str, preview_mode: bool) -> None:
         settings["finalExport"] = render_record
     settings["updatedAt"] = now
     project["updatedAt"] = now
-    job = _find_job(project, job_id)
     job["status"] = "Completed"
     job["progress"] = 100
     job["message"] = f"{'Video preview' if preview_mode else 'Video export'} completed: {render_record['label']}."
@@ -688,6 +717,8 @@ def _render_video(
     audio_path: Path | None,
     output_path: Path,
     settings: dict[str, Any],
+    job_id: str | None,
+    should_cancel,
     progress_callback,
 ) -> None:
     ffmpeg = _ffmpeg_exe()
@@ -751,7 +782,7 @@ def _render_video(
     command += ["-movflags", "+faststart", str(output_path)]
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    _run_ffmpeg_with_progress(command, total_expected_duration, progress_callback)
+    _run_ffmpeg_with_progress(command, total_expected_duration, progress_callback, job_id=job_id, should_cancel=should_cancel)
     if not output_path.exists() or output_path.stat().st_size == 0:
         raise RuntimeError("FFmpeg did not create a final MP4.")
 
@@ -1099,28 +1130,76 @@ def _watermark_settings_for_record(watermark: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _run_ffmpeg_with_progress(command: list[str], expected_duration: float, progress_callback) -> None:
-    process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace")
-    stderr_lines: list[str] = []
-    assert process.stdout is not None
-    for raw_line in process.stdout:
-        line = raw_line.strip()
-        if line.startswith("out_time_ms="):
-            try:
-                seconds = int(line.partition("=")[2]) / 1_000_000
-                fraction = seconds / expected_duration if expected_duration > 0 else 0
-                progress_callback(max(0.0, min(0.98, fraction)), "Rendering final MP4.")
-            except ValueError:
-                pass
-        elif line == "progress=end":
-            progress_callback(0.99, "Finalizing MP4.")
+def _video_job_cancel_requested(project_id: str, job_id: str) -> bool:
+    data = store.load()
+    project = _find_project(data, project_id)
+    job = _find_job(project, job_id)
+    return job.get("status") in {"Cancelling", "Cancelled"}
 
-    _, stderr = process.communicate()
-    if stderr:
-        stderr_lines.append(stderr.strip())
-    if process.returncode != 0:
-        detail = "\n".join(item for item in stderr_lines if item).strip()
-        raise RuntimeError(detail or "FFmpeg video export failed.")
+
+def _terminate_video_process(job_id: str) -> None:
+    with ACTIVE_VIDEO_PROCESSES_LOCK:
+        process = ACTIVE_VIDEO_PROCESSES.get(job_id)
+    if process is not None:
+        _terminate_process(process)
+
+
+def _terminate_process(process: subprocess.Popen) -> None:
+    if process.poll() is not None:
+        return
+    try:
+        process.terminate()
+        process.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait(timeout=5)
+    except OSError:
+        pass
+
+
+def _run_ffmpeg_with_progress(command: list[str], expected_duration: float, progress_callback, job_id: str | None = None, should_cancel=None) -> None:
+    process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace")
+    if job_id:
+        with ACTIVE_VIDEO_PROCESSES_LOCK:
+            ACTIVE_VIDEO_PROCESSES[job_id] = process
+    stderr_lines: list[str] = []
+    try:
+        assert process.stdout is not None
+        for raw_line in process.stdout:
+            if should_cancel and should_cancel():
+                _terminate_process(process)
+                raise JobCancelled()
+            line = raw_line.strip()
+            if line.startswith("out_time_ms="):
+                try:
+                    seconds = int(line.partition("=")[2]) / 1_000_000
+                    fraction = seconds / expected_duration if expected_duration > 0 else 0
+                    try:
+                        progress_callback(max(0.0, min(0.98, fraction)), "Rendering final MP4.")
+                    except JobCancelled:
+                        _terminate_process(process)
+                        raise
+                except ValueError:
+                    pass
+            elif line == "progress=end":
+                try:
+                    progress_callback(0.99, "Finalizing MP4.")
+                except JobCancelled:
+                    _terminate_process(process)
+                    raise
+
+        _, stderr = process.communicate()
+        if stderr:
+            stderr_lines.append(stderr.strip())
+        if should_cancel and should_cancel():
+            raise JobCancelled()
+        if process.returncode != 0:
+            detail = "\n".join(item for item in stderr_lines if item).strip()
+            raise RuntimeError(detail or "FFmpeg video export failed.")
+    finally:
+        if job_id:
+            with ACTIVE_VIDEO_PROCESSES_LOCK:
+                ACTIVE_VIDEO_PROCESSES.pop(job_id, None)
 
 
 def _probe_video(path: Path) -> dict[str, Any]:
@@ -1731,6 +1810,8 @@ def _update_job(project_id: str, job_id: str, **updates: Any) -> None:
     data = store.load()
     project = _find_project(data, project_id)
     job = _find_job(project, job_id)
+    if job.get("status") in {"Cancelling", "Cancelled"}:
+        raise JobCancelled(job.get("message") or "Job was stopped by the user.")
     job.update(updates)
     job["updatedAt"] = utc_now_iso()
     store.save(data)

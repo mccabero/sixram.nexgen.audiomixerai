@@ -1,7 +1,7 @@
 import { Activity, ArrowLeft, BarChart3, Gauge, RefreshCw, Search, SlidersHorizontal, Trash2, TriangleAlert, WandSparkles, Zap } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { acceptAllStemDetections, acceptStemDetection, clearDetectionMemory, deleteAnalysisResults, deleteAutoBalance, deleteStemDetections, detectStemTypes, generateAutoBalance, getProcessingJob, getProject, startAnalysis, updateStemType } from "../api.js";
+import { acceptAllStemDetections, acceptStemDetection, cancelProcessingJob, clearDetectionMemory, deleteAnalysisResults, deleteAutoBalance, deleteStemDetections, detectStemTypes, generateAutoBalance, getProcessingJob, getProject, startAnalysis, updateStemType } from "../api.js";
 import Button from "../components/Button.jsx";
 import EmptyState from "../components/EmptyState.jsx";
 import ProcessingPanel from "../components/ProcessingPanel.jsx";
@@ -10,7 +10,7 @@ import WorkflowGuide from "../components/WorkflowGuide.jsx";
 import { STEM_TYPES } from "../constants.js";
 import { formatDb, formatDuration, formatLufs, formatPercent } from "../utils/format.js";
 
-const runningStatuses = new Set(["Pending", "Processing"]);
+const runningStatuses = new Set(["Pending", "Processing", "Cancelling"]);
 const analysisGridColumns =
   "xl:grid-cols-[minmax(220px,1fr)_160px_190px_90px_90px_90px_105px_90px_90px_90px_120px]";
 
@@ -20,6 +20,7 @@ export default function AnalyzePage() {
   const [job, setJob] = useState(null);
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState("");
+  const [stoppingJobId, setStoppingJobId] = useState("");
   const [busyStemId, setBusyStemId] = useState("");
   const [error, setError] = useState("");
   const [balanceNotice, setBalanceNotice] = useState("");
@@ -93,6 +94,19 @@ export default function AnalyzePage() {
       setError(err.message);
     } finally {
       setActionLoading("");
+    }
+  };
+
+  const stopAnalysis = async () => {
+    if (!job?.id || job.status === "Cancelling") return;
+    setStoppingJobId(job.id);
+    setError("");
+    try {
+      setJob(await cancelProcessingJob(projectId, job.id));
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setStoppingJobId("");
     }
   };
 
@@ -229,7 +243,15 @@ export default function AnalyzePage() {
   }
 
   const actionPanel = running
-    ? { title: "Analyzing Stems", message: job?.message || "Processing uploaded audio stems.", progress: job?.progress || 0 }
+    ? {
+        title: job?.status === "Cancelling" ? "Stopping Analysis" : "Analyzing Stems",
+        message: job?.message || "Processing uploaded audio stems.",
+        progress: job?.progress || 0,
+        actionLabel: "Stop Analysis",
+        actionBusy: stoppingJobId === job?.id || job?.status === "Cancelling",
+        actionDisabled: stoppingJobId === job?.id || job?.status === "Cancelling",
+        onAction: stopAnalysis,
+      }
     : busyStemId
       ? { title: "Updating Stem", message: "Saving stem type or detection choice." }
       : actionLoading === "refresh"

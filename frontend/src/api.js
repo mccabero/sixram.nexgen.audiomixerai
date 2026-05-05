@@ -214,6 +214,18 @@ export function abandonProcessingJob(projectId, jobId) {
   });
 }
 
+export function cancelProcessingJob(projectId, jobId) {
+  return request(`/projects/${projectId}/jobs/${jobId}/cancel`, {
+    method: "POST",
+  });
+}
+
+export function cancelVideoExportJob(projectId, jobId) {
+  return request(`/projects/${projectId}/video-editor/jobs/${jobId}/cancel`, {
+    method: "POST",
+  });
+}
+
 export function updateCleaningSettings(projectId, stemId, updates) {
   return request(`/projects/${projectId}/stems/${stemId}/cleaning`, {
     method: "PATCH",

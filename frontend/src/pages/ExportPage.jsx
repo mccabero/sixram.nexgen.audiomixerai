@@ -2,6 +2,7 @@ import { ArrowLeft, Archive, CheckCircle2, Download, FileAudio, Film, Gauge, Ref
 import { useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import {
+  cancelProcessingJob,
   createProjectBackup,
   deleteExports,
   deleteMasters,
@@ -33,7 +34,7 @@ const defaultControls = {
   trimStartSeconds: 0,
   trimEndSeconds: 0,
 };
-const runningStatuses = new Set(["Pending", "Processing"]);
+const runningStatuses = new Set(["Pending", "Processing", "Cancelling"]);
 
 export default function ExportPage() {
   const { projectId } = useParams();
@@ -41,6 +42,7 @@ export default function ExportPage() {
   const [presetPayload, setPresetPayload] = useState({ presets: [], outputFormats: [], truePeakCeilingDb: -1 });
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState("");
+  const [stoppingJobId, setStoppingJobId] = useState("");
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [latestMaster, setLatestMaster] = useState(null);
@@ -126,13 +128,17 @@ export default function ExportPage() {
         if (!runningStatuses.has(nextJob.status)) {
           const nextProject = await getProject(projectId);
           setProject(nextProject);
-          const masters = nextProject.masteringSettings?.masterVersions || [];
-          const latest = masters.find((master) => master.id === nextProject.masteringSettings?.latestMasterVersionId) || masters[masters.length - 1] || null;
-          if (latest) {
-            setLatestMaster(latest);
-            setCompareA(latest.id);
-            setUpdatedMasterId(latest.id);
-            setNotice(`Master updated: ${latest.label} is ready to review.`);
+          if (nextJob.status === "Completed") {
+            const masters = nextProject.masteringSettings?.masterVersions || [];
+            const latest = masters.find((master) => master.id === nextProject.masteringSettings?.latestMasterVersionId) || masters[masters.length - 1] || null;
+            if (latest) {
+              setLatestMaster(latest);
+              setCompareA(latest.id);
+              setUpdatedMasterId(latest.id);
+              setNotice(`Master updated: ${latest.label} is ready to review.`);
+            }
+          } else if (nextJob.status === "Cancelled") {
+            setNotice("Master render stopped.");
           }
           setActionLoading("");
           if (nextJob.status === "Failed") {
@@ -297,6 +303,19 @@ export default function ExportPage() {
     }
   };
 
+  const stopMasterRender = async () => {
+    if (!masterJob?.id || masterJob.status === "Cancelling") return;
+    setStoppingJobId(masterJob.id);
+    setError("");
+    try {
+      setMasterJob(await cancelProcessingJob(projectId, masterJob.id));
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setStoppingJobId("");
+    }
+  };
+
   const removeMasters = async () => {
     if (!window.confirm("Delete all master files and reports? Mix versions and original stems are kept.")) return;
     setActionLoading("deleteMasters");
@@ -334,7 +353,7 @@ export default function ExportPage() {
     return <ProcessingPanel title="Loading Export" message="Reading mix versions, mastering settings, and previous masters." />;
   }
 
-  const actionPanel = actionPanelFor(actionLoading, masterJob);
+  const actionPanel = actionPanelFor(actionLoading, masterJob, stopMasterRender, stoppingJobId);
   const selectedA = comparisonOptions.find((option) => option.id === compareA);
   const selectedB = comparisonOptions.find((option) => option.id === compareB);
   const shownLatestMaster = latestMaster || masterVersions.find((master) => master.id === masteringSettings.latestMasterVersionId) || masterVersions[masterVersions.length - 1] || null;
@@ -874,12 +893,16 @@ function Readout({ label, value }) {
   );
 }
 
-function actionPanelFor(actionLoading, masterJob) {
+function actionPanelFor(actionLoading, masterJob, onStopMaster, stoppingJobId) {
   if (masterJob && runningStatuses.has(masterJob.status)) {
     return {
-      title: "Generating Master",
+      title: masterJob.status === "Cancelling" ? "Stopping Master Render" : "Generating Master",
       message: masterJob.message || "Analyzing loudness, applying mastering chain, and writing reports.",
       progress: masterJob.progress || 0,
+      actionLabel: "Stop Master",
+      actionBusy: stoppingJobId === masterJob.id || masterJob.status === "Cancelling",
+      actionDisabled: stoppingJobId === masterJob.id || masterJob.status === "Cancelling",
+      onAction: onStopMaster,
     };
   }
   if (actionLoading === "refresh") return { title: "Refreshing Export", message: "Reading latest masters and reports." };

@@ -22,15 +22,18 @@ from .models import (
 )
 from .stem_detection import effective_stem_type
 from .storage import (
+    JobCancelled,
     _find_project,
     display_path,
+    mark_processing_job_cancelled,
     project_subdirs,
+    raise_if_processing_job_cancelled,
     resolve_stored_file_path,
     store,
 )
 
 
-ACTIVE_JOB_STATUSES = {"Pending", "Processing"}
+ACTIVE_JOB_STATUSES = {"Pending", "Processing", "Cancelling"}
 VOCAL_TYPES = {"Lead Vocal", "Backing Vocal"}
 RUNNING_VOCAL_JOB_IDS: set[str] = set()
 RUNNING_VOCAL_JOB_LOCK = threading.Lock()
@@ -158,6 +161,8 @@ def analyze_project_vocals(project_id: str) -> Project:
                 project_subdirs(project_id)["logs"],
                 f"Analyzed vocal {stem['originalFilename']} for recommendations: {result['summary']}",
             )
+        except JobCancelled:
+            raise
         except Exception as exc:
             error_message = str(exc) or "Vocal recommendation analysis failed."
             stem["vocalAnalysisResult"] = {
@@ -420,6 +425,8 @@ def run_vocal_enhancement_job(project_id: str, job_id: str) -> None:
 
     try:
         _run_vocal_enhancement_job(project_id, job_id)
+    except JobCancelled:
+        mark_processing_job_cancelled(project_id, job_id)
     finally:
         with RUNNING_VOCAL_JOB_LOCK:
             RUNNING_VOCAL_JOB_IDS.discard(job_id)
@@ -528,6 +535,8 @@ def _run_vocal_enhancement_job(project_id: str, job_id: str) -> None:
             _update_stem_vocal(project_id, stem["id"], status="Completed", result=enhancement_result)
             successes += 1
             append_project_log(project_subdirs(project_id)["logs"], f"Enhanced vocal {stem['originalFilename']} to {enhanced_path}.")
+        except JobCancelled:
+            raise
         except Exception as exc:
             error_message = str(exc) or "Vocal enhancement failed."
             enhancement_result = {
@@ -573,6 +582,7 @@ def _run_vocal_enhancement_job(project_id: str, job_id: str) -> None:
 
         _update_job(project_id, job_id, progress=_item_progress(index, total, 1.0))
 
+    raise_if_processing_job_cancelled(project_id, job_id)
     final_status = "Completed" if successes > 0 else "Failed"
     final_message = "Vocal enhancement completed." if final_status == "Completed" else "Vocal enhancement failed for all enabled stems."
     now = utc_now_iso()
@@ -1201,6 +1211,8 @@ def _update_job(project_id: str, job_id: str, **updates: Any) -> None:
     data = store.load()
     project = _find_project(data, project_id)
     job = _find_job(project, job_id)
+    if job.get("status") in {"Cancelling", "Cancelled"}:
+        raise JobCancelled(job.get("message") or "Job was stopped by the user.")
     job.update(updates)
     job["updatedAt"] = utc_now_iso()
     store.save(data)

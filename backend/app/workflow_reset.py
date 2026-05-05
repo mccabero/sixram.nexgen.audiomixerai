@@ -10,7 +10,7 @@ from .models import Project
 from .storage import _find_project, project_subdirs, resolve_stored_file_path, store
 
 
-ACTIVE_JOB_STATUSES = {"Pending", "Processing"}
+ACTIVE_JOB_STATUSES = {"Pending", "Processing", "Cancelling"}
 
 
 def delete_analysis_results(project_id: str) -> Project:
@@ -267,7 +267,7 @@ def _rmtree_with_retries(path: Path) -> None:
 def _require_no_active_jobs(project: dict[str, Any]) -> None:
     active = next((job for job in project.get("processingJobs", []) if job.get("status") in ACTIVE_JOB_STATUSES), None)
     if active:
-        raise HTTPException(status_code=400, detail=f"Wait for the active {active.get('type', 'processing')} job to finish or abandon it before deleting generated files.")
+        raise HTTPException(status_code=400, detail=f"Wait for the active {active.get('type', 'processing')} job to finish or stop it before deleting generated files.")
 
 
 def _status_after_analysis(project: dict[str, Any]) -> str:

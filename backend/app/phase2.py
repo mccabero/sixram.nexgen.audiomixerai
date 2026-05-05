@@ -10,9 +10,12 @@ from .logging_utils import append_project_log, utc_now_iso
 from .models import ProcessingJob, Project, RoughMixResponse, UpdateMixStemRequest
 from .stem_detection import effective_stem_type
 from .storage import (
+    JobCancelled,
     display_path,
     ensure_project_dirs,
+    mark_processing_job_cancelled,
     project_subdirs,
+    raise_if_processing_job_cancelled,
     resolve_stored_file_path,
     store,
     _find_project,
@@ -36,7 +39,7 @@ ROLE_TARGETS = {
 }
 
 
-ACTIVE_JOB_STATUSES = {"Pending", "Processing"}
+ACTIVE_JOB_STATUSES = {"Pending", "Processing", "Cancelling"}
 RUNNING_JOB_IDS: set[str] = set()
 RUNNING_JOB_LOCK = threading.Lock()
 
@@ -94,6 +97,8 @@ def run_analysis_job(project_id: str, job_id: str) -> None:
 
     try:
         _run_analysis_job(project_id, job_id)
+    except JobCancelled:
+        mark_processing_job_cancelled(project_id, job_id)
     finally:
         with RUNNING_JOB_LOCK:
             RUNNING_JOB_IDS.discard(job_id)
@@ -155,6 +160,8 @@ def _run_analysis_job(project_id: str, job_id: str) -> None:
             _update_stem_analysis(project_id, stem["id"], result)
             successes += 1
             append_project_log(project_subdirs(project_id)["logs"], f"Analyzed stem {stem['originalFilename']}.")
+        except JobCancelled:
+            raise
         except Exception as exc:
             error_message = str(exc) or "Analysis failed."
             result = {
@@ -182,6 +189,7 @@ def _run_analysis_job(project_id: str, job_id: str) -> None:
 
         _update_job(project_id, job_id, progress=_item_progress(index, total, 1.0))
 
+    raise_if_processing_job_cancelled(project_id, job_id)
     _refresh_analysis_warnings(project_id)
     final_status = "Completed" if successes > 0 else "Failed"
     final_message = "Analysis completed." if final_status == "Completed" else "Analysis failed for all stems."
@@ -385,6 +393,8 @@ def _update_job(project_id: str, job_id: str, **updates: Any) -> None:
     data = store.load()
     project = _find_project(data, project_id)
     job = _find_job(project, job_id)
+    if job.get("status") in {"Cancelling", "Cancelled"}:
+        raise JobCancelled(job.get("message") or "Job was stopped by the user.")
     job.update(updates)
     job["updatedAt"] = utc_now_iso()
     store.save(data)

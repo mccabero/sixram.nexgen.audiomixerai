@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import {
   applyAutoBalance,
+  cancelProcessingJob,
   deleteAllMixVersions,
   deleteMixVersion,
   deleteRoughMix,
@@ -45,7 +46,7 @@ const defaultControls = {
   vocalReverbAmount: 14,
   roomSize: 38,
 };
-const runningStatuses = new Set(["Pending", "Processing"]);
+const runningStatuses = new Set(["Pending", "Processing", "Cancelling"]);
 
 export default function MixerPage() {
   const { projectId } = useParams();
@@ -53,6 +54,7 @@ export default function MixerPage() {
   const [presets, setPresets] = useState(MIX_PRESETS.map((name) => ({ name })));
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState("");
+  const [stoppingJobId, setStoppingJobId] = useState("");
   const [savingStemId, setSavingStemId] = useState("");
   const [roughMix, setRoughMix] = useState(null);
   const [advancedMix, setAdvancedMix] = useState(null);
@@ -149,6 +151,8 @@ export default function MixerPage() {
           setActionLoading("");
           if (nextJob.status === "Failed") {
             setError(nextJob.errors?.[0]?.error || nextJob.message || "Mix rendering failed.");
+          } else if (nextJob.status === "Cancelled") {
+            setPreviewNotice("Mix render stopped.");
           }
         }
       } catch (err) {
@@ -288,6 +292,19 @@ export default function MixerPage() {
     } catch (err) {
       setError(err.message);
       setActionLoading("");
+    }
+  };
+
+  const stopMixRender = async () => {
+    if (!mixJob?.id || mixJob.status === "Cancelling") return;
+    setStoppingJobId(mixJob.id);
+    setError("");
+    try {
+      setMixJob(await cancelProcessingJob(projectId, mixJob.id));
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setStoppingJobId("");
     }
   };
 
@@ -447,7 +464,7 @@ export default function MixerPage() {
     return <ProcessingPanel title="Loading Mixer" message="Reading mix settings, versions, and preview references." />;
   }
 
-  const actionPanel = actionPanelFor(actionLoading, savingStemId, mixJob);
+  const actionPanel = actionPanelFor(actionLoading, savingStemId, mixJob, stopMixRender, stoppingJobId);
   const selectedA = comparisonOptions.find((option) => option.id === compareA);
   const selectedB = comparisonOptions.find((option) => option.id === compareB);
 
@@ -986,12 +1003,21 @@ function Readout({ label, value }) {
   );
 }
 
-function actionPanelFor(actionLoading, savingStemId, mixJob) {
+function actionPanelFor(actionLoading, savingStemId, mixJob, onStopMix, stoppingJobId) {
   if (mixJob && runningStatuses.has(mixJob.status)) {
     return {
-      title: mixJob.type === "Instrumental Mix" ? "Rendering Instrumental Mix" : "Rendering Advanced Mix",
+      title:
+        mixJob.status === "Cancelling"
+          ? "Stopping Mix Render"
+          : mixJob.type === "Instrumental Mix"
+            ? "Rendering Instrumental Mix"
+            : "Rendering Advanced Mix",
       message: mixJob.message || "Processing stems and writing a versioned mix.",
       progress: mixJob.progress || 0,
+      actionLabel: "Stop Render",
+      actionBusy: stoppingJobId === mixJob.id || mixJob.status === "Cancelling",
+      actionDisabled: stoppingJobId === mixJob.id || mixJob.status === "Cancelling",
+      onAction: onStopMix,
     };
   }
   if (actionLoading === "refresh") return { title: "Refreshing Mixer", message: "Reading the latest mix settings and version metadata." };

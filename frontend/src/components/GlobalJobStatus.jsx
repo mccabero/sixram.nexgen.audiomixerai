@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Link, useLocation } from "react-router-dom";
 import {
   abandonProcessingJob,
+  cancelProcessingJob,
   getProject,
   startAdvancedMix,
   startAnalysis,
@@ -14,7 +15,7 @@ import {
 import { formatDateTime } from "../utils/format.js";
 import Button from "./Button.jsx";
 
-const runningStatuses = new Set(["Pending", "Processing"]);
+const runningStatuses = new Set(["Pending", "Processing", "Cancelling"]);
 const retryableTypes = new Set(["Analysis", "Cleaning", "Vocal Enhancement", "Advanced Mix", "Instrumental Mix", "Mastering"]);
 const staleJobMs = 30 * 60 * 1000;
 const recentFailureMs = 24 * 60 * 60 * 1000;
@@ -25,6 +26,7 @@ export default function GlobalJobStatus() {
   const [project, setProject] = useState(null);
   const [error, setError] = useState("");
   const [retrying, setRetrying] = useState(false);
+  const [stopping, setStopping] = useState(false);
   const [dismissed, setDismissed] = useState(() => new Set(readDismissedJobs()));
 
   const loadProject = async () => {
@@ -92,6 +94,20 @@ export default function GlobalJobStatus() {
     }
   };
 
+  const stopJob = async () => {
+    if (!visibleJob || visibleJob.status === "Cancelling") return;
+    setStopping(true);
+    setError("");
+    try {
+      await cancelProcessingJob(projectId, visibleJob.id);
+      await loadProject();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setStopping(false);
+    }
+  };
+
   const dismissJob = () => {
     if (!visibleJob) return;
     setDismissed((current) => {
@@ -141,6 +157,12 @@ export default function GlobalJobStatus() {
                   <Button type="button" onClick={retryJob} disabled={retrying} className="sm:w-auto">
                     <RotateCcw size={17} />
                     {retrying ? "Retrying..." : "Retry"}
+                  </Button>
+                ) : null}
+                {visibleJob.status !== "Cancelling" && runningStatuses.has(visibleJob.status) ? (
+                  <Button type="button" variant="danger" onClick={stopJob} disabled={stopping} className="sm:w-auto">
+                    <X size={17} />
+                    {stopping ? "Stopping..." : "Stop"}
                   </Button>
                 ) : null}
                 {failed || stale ? (
@@ -201,6 +223,7 @@ function masteringRetryPayload(project) {
 function jobTitle(job, stale) {
   if (stale) return `${job.type} looks interrupted`;
   if (job.status === "Failed") return `${job.type} failed`;
+  if (job.status === "Cancelling") return `Stopping ${job.type}`;
   return `${job.type} ${job.status.toLowerCase()}`;
 }
 
@@ -215,6 +238,7 @@ function jobDestination(projectId, type) {
   if (type === "Vocal Enhancement") return `/projects/${projectId}/vocals`;
   if (type === "Advanced Mix" || type === "Instrumental Mix") return `/projects/${projectId}/mixer`;
   if (type === "Mastering") return `/projects/${projectId}/mastering`;
+  if (type === "Video Export" || type === "Video Preview") return `/projects/${projectId}/video-editor`;
   return `/projects/${projectId}`;
 }
 

@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import {
   applyVideoBrandingTemplate,
+  cancelVideoExportJob,
   createVideoBrandingTemplate,
   deleteVideoBrandingTemplate,
   deleteVideoRawClip,
@@ -25,7 +26,7 @@ import StatusBadge from "../components/StatusBadge.jsx";
 import { MAX_VIDEO_LOGO_UPLOAD_BYTES, MAX_VIDEO_LOGO_UPLOAD_MB, MAX_VIDEO_UPLOAD_BYTES, MAX_VIDEO_UPLOAD_MB, SUPPORTED_VIDEO_EXTENSIONS, SUPPORTED_VIDEO_LOGO_EXTENSIONS } from "../constants.js";
 import { formatBytes, formatDateTime, formatDuration } from "../utils/format.js";
 
-const runningStatuses = new Set(["Pending", "Processing"]);
+const runningStatuses = new Set(["Pending", "Processing", "Cancelling"]);
 const exportPresets = [
   { name: "YouTube 1080p", description: "Full HD MP4 for final session uploads." },
   { name: "YouTube 1440p (2K)", description: "2560 x 1440 export for sharper YouTube uploads." },
@@ -168,6 +169,7 @@ export default function VideoEditorPage() {
   const [logoProgress, setLogoProgress] = useState(0);
   const [renderJob, setRenderJob] = useState(null);
   const [previewJob, setPreviewJob] = useState(null);
+  const [stoppingJobId, setStoppingJobId] = useState("");
   const [waveformState, setWaveformState] = useState(null);
   const [waveformLoading, setWaveformLoading] = useState(false);
   const [templateName, setTemplateName] = useState("");
@@ -246,6 +248,8 @@ export default function VideoEditorPage() {
           setActionLoading("");
           if (nextJob.status === "Completed") {
             setNotice("Final MP4 is ready.");
+          } else if (nextJob.status === "Cancelled") {
+            setNotice("Video export stopped.");
           } else {
             setError(nextJob.errors?.[0]?.error || nextJob.message || "Video export failed.");
           }
@@ -270,6 +274,8 @@ export default function VideoEditorPage() {
           setActionLoading("");
           if (nextJob.status === "Completed") {
             setNotice("Edited preview is ready.");
+          } else if (nextJob.status === "Cancelled") {
+            setNotice("Edited preview render stopped.");
           } else {
             setError(nextJob.errors?.[0]?.error || nextJob.message || "Edited preview failed.");
           }
@@ -549,6 +555,22 @@ export default function VideoEditorPage() {
     }
   };
 
+  const stopVideoJob = async () => {
+    const activeJob = previewRunning ? previewJob : renderRunning ? renderJob : null;
+    if (!activeJob?.id || activeJob.status === "Cancelling") return;
+    setStoppingJobId(activeJob.id);
+    setError("");
+    try {
+      const nextJob = await cancelVideoExportJob(projectId, activeJob.id);
+      if (activeJob.type === "Video Preview") setPreviewJob(nextJob);
+      else setRenderJob(nextJob);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setStoppingJobId("");
+    }
+  };
+
   const saveBrandingTemplate = async () => {
     const name = templateName.trim();
     if (!name) {
@@ -676,7 +698,7 @@ export default function VideoEditorPage() {
     return <ProcessingPanel title="Loading Video Editor" message="Reading video assets, master files, and editor settings." />;
   }
 
-  const actionPanel = actionPanelFor(actionLoading, renderJob, previewJob, uploadProgress, logoProgress);
+  const actionPanel = actionPanelFor(actionLoading, renderJob, previewJob, uploadProgress, logoProgress, stopVideoJob, stoppingJobId);
 
   return (
     <div>
@@ -3119,19 +3141,27 @@ function Readout({ label, value }) {
   );
 }
 
-function actionPanelFor(actionLoading, renderJob, previewJob, uploadProgress, logoProgress) {
+function actionPanelFor(actionLoading, renderJob, previewJob, uploadProgress, logoProgress, onStopVideoJob, stoppingJobId) {
   if (previewJob && runningStatuses.has(previewJob.status)) {
     return {
-      title: "Rendering Edited Preview",
+      title: previewJob.status === "Cancelling" ? "Stopping Edited Preview" : "Rendering Edited Preview",
       message: previewJob.message || "Preparing a lightweight preview MP4 from the current edit.",
       progress: previewJob.progress || 0,
+      actionLabel: "Stop Preview",
+      actionBusy: stoppingJobId === previewJob.id || previewJob.status === "Cancelling",
+      actionDisabled: stoppingJobId === previewJob.id || previewJob.status === "Cancelling",
+      onAction: onStopVideoJob,
     };
   }
   if (renderJob && runningStatuses.has(renderJob.status)) {
     return {
-      title: "Rendering Video",
+      title: renderJob.status === "Cancelling" ? "Stopping Video Render" : "Rendering Video",
       message: renderJob.message || "Combining the primary video, focused cutaways, selected audio, sync, transitions, and branding.",
       progress: renderJob.progress || 0,
+      actionLabel: "Stop Render",
+      actionBusy: stoppingJobId === renderJob.id || renderJob.status === "Cancelling",
+      actionDisabled: stoppingJobId === renderJob.id || renderJob.status === "Cancelling",
+      onAction: onStopVideoJob,
     };
   }
   if (actionLoading === "upload") return { title: "Uploading Video", message: "Copying the selected primary or focused video into local project storage.", progress: uploadProgress };

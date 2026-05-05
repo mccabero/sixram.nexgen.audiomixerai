@@ -19,6 +19,8 @@ const styles = {
   Uploaded: "border-cyan-300/20 bg-cyan-300/10 text-cyan-100",
   Pending: "border-zinc-400/20 bg-zinc-400/10 text-zinc-200",
   Processing: "border-teal-300/20 bg-teal-300/10 text-teal-100",
+  Cancelling: "border-amber-300/20 bg-amber-300/10 text-amber-100",
+  Cancelled: "border-zinc-400/20 bg-zinc-400/10 text-zinc-200",
   Completed: "border-emerald-300/20 bg-emerald-300/10 text-emerald-100",
   Failed: "border-rose-300/20 bg-rose-300/10 text-rose-100",
 };

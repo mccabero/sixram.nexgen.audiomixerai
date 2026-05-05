@@ -11,16 +11,19 @@ from .logging_utils import append_project_log, utc_now_iso
 from .models import ProcessingJob, Project, Stem, UpdateCleaningSettingsRequest, validate_cleaning_mode
 from .stem_detection import effective_stem_type
 from .storage import (
+    JobCancelled,
     _find_project,
     display_path,
     ensure_project_dirs,
+    mark_processing_job_cancelled,
     project_subdirs,
+    raise_if_processing_job_cancelled,
     resolve_stored_file_path,
     store,
 )
 
 
-ACTIVE_JOB_STATUSES = {"Pending", "Processing"}
+ACTIVE_JOB_STATUSES = {"Pending", "Processing", "Cancelling"}
 STALE_CLEANING_JOB_AFTER = timedelta(minutes=30)
 VALID_HUM_FREQUENCIES = {50, 60}
 RUNNING_CLEANING_JOB_IDS: set[str] = set()
@@ -155,6 +158,8 @@ def run_cleaning_job(project_id: str, job_id: str) -> None:
 
     try:
         _run_cleaning_job(project_id, job_id)
+    except JobCancelled:
+        mark_processing_job_cancelled(project_id, job_id)
     finally:
         with RUNNING_CLEANING_JOB_LOCK:
             RUNNING_CLEANING_JOB_IDS.discard(job_id)
@@ -236,6 +241,8 @@ def _run_cleaning_job(project_id: str, job_id: str) -> None:
             _update_stem_cleaning(project_id, stem["id"], status="Completed", result=cleaning_result)
             successes += 1
             append_project_log(project_subdirs(project_id)["logs"], f"Cleaned stem {stem['originalFilename']} to {cleaned_path}.")
+        except JobCancelled:
+            raise
         except Exception as exc:
             error_message = str(exc) or "Cleaning failed."
             cleaning_result = {
@@ -264,6 +271,7 @@ def _run_cleaning_job(project_id: str, job_id: str) -> None:
 
         _update_job(project_id, job_id, progress=_item_progress(index, total, 1.0))
 
+    raise_if_processing_job_cancelled(project_id, job_id)
     final_status = "Completed" if successes > 0 else "Failed"
     final_message = "Cleaning completed." if final_status == "Completed" else "Cleaning failed for all enabled stems."
     now = utc_now_iso()
@@ -341,6 +349,8 @@ def _update_job(project_id: str, job_id: str, **updates: Any) -> None:
     data = store.load()
     project = _find_project(data, project_id)
     job = _find_job(project, job_id)
+    if job.get("status") in {"Cancelling", "Cancelled"}:
+        raise JobCancelled(job.get("message") or "Job was stopped by the user.")
     job.update(updates)
     job["updatedAt"] = utc_now_iso()
     store.save(data)

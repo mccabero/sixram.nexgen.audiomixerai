@@ -12,7 +12,17 @@ from .logging_utils import append_project_log, utc_now_iso
 from .models import MixVersion, ProcessingJob, Project, UpdateMixControlsRequest, UpdateMixVersionRequest
 from .phase2 import _clear_rough_mix_reference, _ensure_mix_setting, _mix_source_path
 from .stem_detection import effective_stem_type
-from .storage import display_path, ensure_project_dirs, project_subdirs, resolve_stored_file_path, store, _find_project
+from .storage import (
+    JobCancelled,
+    display_path,
+    ensure_project_dirs,
+    mark_processing_job_cancelled,
+    project_subdirs,
+    raise_if_processing_job_cancelled,
+    resolve_stored_file_path,
+    store,
+    _find_project,
+)
 
 
 MIX_PRESETS: dict[str, dict[str, Any]] = {
@@ -181,7 +191,7 @@ MIX_PRESETS: dict[str, dict[str, Any]] = {
     },
 }
 
-ACTIVE_JOB_STATUSES = {"Pending", "Processing"}
+ACTIVE_JOB_STATUSES = {"Pending", "Processing", "Cancelling"}
 RUNNING_MIX_JOB_IDS: set[str] = set()
 RUNNING_MIX_JOB_LOCK = threading.Lock()
 VOCAL_TYPES = {"Lead Vocal", "Backing Vocal"}
@@ -249,6 +259,8 @@ def run_advanced_mix_job(project_id: str, job_id: str, instrumental: bool = Fals
 
     try:
         _run_advanced_mix_job(project_id, job_id, instrumental)
+    except JobCancelled:
+        mark_processing_job_cancelled(project_id, job_id)
     finally:
         with RUNNING_MIX_JOB_LOCK:
             RUNNING_MIX_JOB_IDS.discard(job_id)
@@ -268,6 +280,7 @@ def _run_advanced_mix_job(project_id: str, job_id: str, instrumental: bool) -> N
                 message=message,
             ),
         )
+        raise_if_processing_job_cancelled(project_id, job_id)
         _update_job(project_id, job_id, progress=96, message=f"Saving {version.label}.")
         now = utc_now_iso()
         data = store.load()
@@ -281,6 +294,8 @@ def _run_advanced_mix_job(project_id: str, job_id: str, instrumental: bool) -> N
         job["completedAt"] = now
         store.save(data)
         append_project_log(project_subdirs(project_id)["logs"], f"{job_type} job {job_id} completed.")
+    except JobCancelled:
+        raise
     except Exception as exc:
         error_message = str(exc) or f"{job_type} failed."
         now = utc_now_iso()
@@ -569,6 +584,8 @@ def _update_job(project_id: str, job_id: str, **updates: Any) -> None:
     data = store.load()
     project = _find_project(data, project_id)
     job = _find_job(project, job_id)
+    if job.get("status") in {"Cancelling", "Cancelled"}:
+        raise JobCancelled(job.get("message") or "Job was stopped by the user.")
     job.update(updates)
     job["updatedAt"] = utc_now_iso()
     store.save(data)
