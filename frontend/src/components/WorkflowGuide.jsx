@@ -256,12 +256,12 @@ function WorkflowStepCard({ step, active, projectId }) {
   const detailClass = active ? "text-slate-900/72" : "text-slate-200/68";
 
   return (
-    <CardTag {...cardProps} className={`rounded-lg border p-3 transition ${toneClass}`}>
+    <CardTag {...cardProps} data-status={step.status} className={`workflow-step-card rounded-lg border p-3 transition ${toneClass}`}>
       <div className="flex items-start justify-between gap-3">
-        <span className={`grid h-9 w-9 shrink-0 place-items-center rounded-lg border ${statusClass.icon}`}>
+        <span className={`workflow-step-icon grid h-9 w-9 shrink-0 place-items-center rounded-lg border ${statusClass.icon}`}>
           <Icon size={17} />
         </span>
-        <span className={`inline-flex shrink-0 items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-semibold ${statusClass.badge}`}>
+        <span className={`workflow-status-badge inline-flex shrink-0 items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-semibold ${statusClass.badge}`}>
           {step.status === "complete" ? <CheckCircle2 size={12} /> : step.status === "locked" ? <LockKeyhole size={12} /> : <Circle size={12} />}
           {step.statusLabel}
         </span>

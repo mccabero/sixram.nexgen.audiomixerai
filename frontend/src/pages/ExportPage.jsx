@@ -1,4 +1,4 @@
-import { ArrowLeft, Archive, CheckCircle2, Download, FileAudio, Gauge, RefreshCw, Scissors, ShieldCheck, Sparkles, Trash2, TriangleAlert } from "lucide-react";
+import { ArrowLeft, Archive, CheckCircle2, Download, FileAudio, Film, Gauge, RefreshCw, Scissors, ShieldCheck, Sparkles, Trash2, TriangleAlert } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import {
@@ -339,6 +339,9 @@ export default function ExportPage() {
   const selectedB = comparisonOptions.find((option) => option.id === compareB);
   const shownLatestMaster = latestMaster || masterVersions.find((master) => master.id === masteringSettings.latestMasterVersionId) || masterVersions[masterVersions.length - 1] || null;
   const masterJustUpdated = Boolean(shownLatestMaster && shownLatestMaster.id === updatedMasterId);
+  const videoEditorHref = shownLatestMaster?.id
+    ? `/projects/${projectId}/video-editor?audio=${encodeURIComponent(shownLatestMaster.id)}`
+    : `/projects/${projectId}/video-editor`;
 
   return (
     <div>
@@ -357,6 +360,10 @@ export default function ExportPage() {
           <Button type="button" variant="secondary" onClick={refreshProject} disabled={actionLoading === "refresh"}>
             <RefreshCw size={17} />
             Refresh
+          </Button>
+          <Button as={Link} to={videoEditorHref} variant="secondary">
+            <Film size={17} />
+            Edit Video
           </Button>
           <Button type="button" onClick={runMaster} disabled={!selectedMixId || actionLoading === "master" || masterRunning}>
             <Sparkles size={17} />
@@ -489,7 +496,7 @@ export default function ExportPage() {
               </div>
             </div>
 
-            <LatestMasterPanel master={shownLatestMaster} selectedMix={selectedMix} recentlyUpdated={masterJustUpdated} />
+            <LatestMasterPanel master={shownLatestMaster} selectedMix={selectedMix} recentlyUpdated={masterJustUpdated} videoEditorHref={videoEditorHref} />
           </section>
 
           <section className="mt-6 grid gap-5 xl:grid-cols-[1.05fr_0.95fr]">
@@ -542,7 +549,7 @@ function MasteringPresetCards({ presets, selectedPreset, onSelect }) {
   );
 }
 
-function LatestMasterPanel({ master, selectedMix, recentlyUpdated }) {
+function LatestMasterPanel({ master, selectedMix, recentlyUpdated, videoEditorHref }) {
   return (
     <div className={`rounded-lg border bg-white/[0.04] p-4 ${recentlyUpdated ? "border-emerald-300/25 shadow-[0_0_32px_rgba(16,185,129,0.12)]" : "border-white/10"}`}>
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
@@ -577,6 +584,10 @@ function LatestMasterPanel({ master, selectedMix, recentlyUpdated }) {
           <WaveformPreview src={master.fileUrl} variant="teal" />
           <audio className="w-full" src={master.fileUrl} controls />
           <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
+            <Button as={Link} to={videoEditorHref}>
+              <Film size={17} />
+              Use In Video Editor
+            </Button>
             <Button as="a" href={master.fileUrl} target="_blank" rel="noreferrer" variant="secondary">
               <Download size={17} />
               Open Master

@@ -8,6 +8,7 @@ import MixerPage from "./pages/MixerPage.jsx";
 import ProjectDetail from "./pages/ProjectDetail.jsx";
 import SectionPlaceholder from "./pages/SectionPlaceholder.jsx";
 import UploadStems from "./pages/UploadStems.jsx";
+import VideoEditorPage from "./pages/VideoEditorPage.jsx";
 import VocalEnhancerPage from "./pages/VocalEnhancerPage.jsx";
 
 export default function App() {
@@ -23,6 +24,7 @@ export default function App() {
         <Route path="projects/:projectId/mixer" element={<MixerPage />} />
         <Route path="projects/:projectId/mastering" element={<ExportPage />} />
         <Route path="projects/:projectId/export" element={<ExportPage />} />
+        <Route path="projects/:projectId/video-editor" element={<VideoEditorPage />} />
         <Route path="projects/:projectId/:section" element={<SectionPlaceholder />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>

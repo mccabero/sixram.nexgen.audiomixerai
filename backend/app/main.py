@@ -7,6 +7,7 @@ from .config import MAX_UPLOAD_MB, STEM_TYPES, STORAGE_ROOT
 from .models import (
     AudioInputDeviceListResponse,
     CreateProjectRequest,
+    CreateVideoBrandingTemplateRequest,
     CreateVocalPresetRequest,
     DirectRecordingStatus,
     ExportFile,
@@ -28,9 +29,12 @@ from .models import (
     UpdateMixVersionRequest,
     UpdateMasteringControlsRequest,
     UpdateVocalEnhancementSettingsRequest,
+    UpdateVideoEditorSettingsRequest,
     UpdateProjectRequest,
     UpdateStemRequest,
     UploadResponse,
+    VideoEditorStateResponse,
+    VideoWaveformStateResponse,
     validate_stem_type,
 )
 from .cleaning import create_cleaning_job, run_cleaning_job, update_stem_cleaning_settings
@@ -88,6 +92,24 @@ from .stem_detection import (
 )
 from .storage import abandon_processing_job, create_project, delete_project, delete_stem, get_project, list_projects, mark_interrupted_jobs, read_project_logs, save_uploaded_stems, update_project, update_stem_type
 from .recording import recording_manager
+from .video_editor import (
+    apply_branding_template,
+    create_branding_template,
+    create_video_preview_job,
+    create_video_render_job,
+    delete_raw_video,
+    delete_branding_template,
+    delete_video_export,
+    get_video_editor_state,
+    get_video_render_job,
+    get_video_waveforms,
+    run_video_auto_sync,
+    run_video_preview_job,
+    run_video_render_job,
+    save_uploaded_raw_video,
+    save_uploaded_watermark_logo,
+    update_video_editor_settings,
+)
 from .workflow_reset import (
     delete_analysis_results,
     delete_auto_balance,
@@ -216,6 +238,80 @@ def api_start_direct_recording(project_id: str, payload: StartDirectRecordingReq
 @app.post("/api/projects/{project_id}/direct-recording/stop", response_model=StopDirectRecordingResponse)
 def api_stop_direct_recording(project_id: str) -> StopDirectRecordingResponse:
     return recording_manager.stop(project_id)
+
+
+@app.get("/api/projects/{project_id}/video-editor", response_model=VideoEditorStateResponse)
+def api_get_video_editor_state(project_id: str) -> VideoEditorStateResponse:
+    return get_video_editor_state(project_id)
+
+
+@app.post("/api/projects/{project_id}/video-editor/raw-video", response_model=VideoEditorStateResponse)
+async def api_upload_raw_video(project_id: str, role: str = "auto", file: UploadFile = File(...)) -> VideoEditorStateResponse:
+    return await save_uploaded_raw_video(project_id, file, role=role)
+
+
+@app.delete("/api/projects/{project_id}/video-editor/raw-videos/{clip_id}", response_model=VideoEditorStateResponse)
+def api_delete_raw_video(project_id: str, clip_id: str) -> VideoEditorStateResponse:
+    return delete_raw_video(project_id, clip_id)
+
+
+@app.post("/api/projects/{project_id}/video-editor/watermark-logo", response_model=VideoEditorStateResponse)
+async def api_upload_video_watermark_logo(project_id: str, file: UploadFile = File(...)) -> VideoEditorStateResponse:
+    return await save_uploaded_watermark_logo(project_id, file)
+
+
+@app.patch("/api/projects/{project_id}/video-editor/settings", response_model=VideoEditorStateResponse)
+def api_update_video_editor_settings(project_id: str, payload: UpdateVideoEditorSettingsRequest) -> VideoEditorStateResponse:
+    return update_video_editor_settings(project_id, payload)
+
+
+@app.get("/api/projects/{project_id}/video-editor/waveforms", response_model=VideoWaveformStateResponse)
+def api_get_video_waveforms(project_id: str) -> VideoWaveformStateResponse:
+    return get_video_waveforms(project_id)
+
+
+@app.post("/api/projects/{project_id}/video-editor/templates", response_model=VideoEditorStateResponse)
+def api_create_video_branding_template(project_id: str, payload: CreateVideoBrandingTemplateRequest) -> VideoEditorStateResponse:
+    return create_branding_template(project_id, payload.name)
+
+
+@app.post("/api/projects/{project_id}/video-editor/templates/{template_id}/apply", response_model=VideoEditorStateResponse)
+def api_apply_video_branding_template(project_id: str, template_id: str) -> VideoEditorStateResponse:
+    return apply_branding_template(project_id, template_id)
+
+
+@app.delete("/api/projects/{project_id}/video-editor/templates/{template_id}", response_model=VideoEditorStateResponse)
+def api_delete_video_branding_template(project_id: str, template_id: str) -> VideoEditorStateResponse:
+    return delete_branding_template(project_id, template_id)
+
+
+@app.post("/api/projects/{project_id}/video-editor/auto-sync", response_model=VideoEditorStateResponse)
+def api_run_video_auto_sync(project_id: str) -> VideoEditorStateResponse:
+    return run_video_auto_sync(project_id)
+
+
+@app.post("/api/projects/{project_id}/video-editor/export-job", response_model=ProcessingJob)
+def api_start_video_export_job(project_id: str, background_tasks: BackgroundTasks) -> ProcessingJob:
+    job = create_video_render_job(project_id)
+    background_tasks.add_task(run_video_render_job, project_id, job.id)
+    return job
+
+
+@app.post("/api/projects/{project_id}/video-editor/preview-job", response_model=ProcessingJob)
+def api_start_video_preview_job(project_id: str, background_tasks: BackgroundTasks) -> ProcessingJob:
+    job = create_video_preview_job(project_id)
+    background_tasks.add_task(run_video_preview_job, project_id, job.id)
+    return job
+
+
+@app.get("/api/projects/{project_id}/video-editor/jobs/{job_id}", response_model=ProcessingJob)
+def api_get_video_export_job(project_id: str, job_id: str) -> ProcessingJob:
+    return get_video_render_job(project_id, job_id)
+
+
+@app.delete("/api/projects/{project_id}/video-editor/exports/{export_id}", response_model=VideoEditorStateResponse)
+def api_delete_video_export(project_id: str, export_id: str) -> VideoEditorStateResponse:
+    return delete_video_export(project_id, export_id)
 
 
 @app.patch("/api/projects/{project_id}/stems/{stem_id}")

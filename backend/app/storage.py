@@ -84,6 +84,7 @@ def project_subdirs(project_id: str) -> dict[str, Path]:
         "original": root / "original",
         "processed": root / "processed",
         "exports": root / "exports",
+        "video": root / "video",
         "logs": root / "logs",
     }
 
@@ -689,6 +690,40 @@ def _ensure_project_defaults(project: dict[str, Any]) -> None:
     project["masteringSettings"].setdefault("latestMasterVersionId", None)
     project["masteringSettings"].setdefault("exportFiles", [])
     project["masteringSettings"].setdefault("updatedAt", None)
+    project.setdefault("videoEditorSettings", _default_video_editor_settings())
+    video_settings = project["videoEditorSettings"]
+    video_defaults = _default_video_editor_settings()
+    for key, value in video_defaults.items():
+        video_settings.setdefault(key, value)
+    video_settings.setdefault("overlay", {})
+    video_settings["overlay"].setdefault("songTitle", None)
+    video_settings["overlay"].setdefault("artistName", None)
+    video_settings["overlay"].setdefault("sessionLabel", None)
+    video_settings["overlay"].setdefault("position", "Lower Left")
+    video_settings["overlay"].setdefault("style", "Boxed")
+    video_settings["overlay"].setdefault("size", "Medium")
+    video_settings.setdefault("watermark", video_defaults["watermark"])
+    video_settings["watermark"].setdefault("enabled", False)
+    video_settings["watermark"].setdefault("logo", None)
+    video_settings["watermark"].setdefault("position", "Top Right")
+    video_settings["watermark"].setdefault("opacity", 0.82)
+    video_settings["watermark"].setdefault("scale", 0.14)
+    video_settings.setdefault("introCard", video_defaults["introCard"])
+    video_settings["introCard"].setdefault("enabled", False)
+    video_settings["introCard"].setdefault("durationSeconds", 2.5)
+    video_settings["introCard"].setdefault("title", None)
+    video_settings["introCard"].setdefault("subtitle", None)
+    video_settings.setdefault("outroCard", video_defaults["outroCard"])
+    video_settings["outroCard"].setdefault("enabled", False)
+    video_settings["outroCard"].setdefault("durationSeconds", 2.5)
+    video_settings["outroCard"].setdefault("title", None)
+    video_settings["outroCard"].setdefault("subtitle", None)
+    video_settings.setdefault("autoSyncResult", video_defaults["autoSyncResult"])
+    video_settings["autoSyncResult"].setdefault("status", "Not Run")
+    video_settings["autoSyncResult"].setdefault("offsetMs", None)
+    video_settings["autoSyncResult"].setdefault("confidence", None)
+    video_settings["autoSyncResult"].setdefault("analyzedAt", None)
+    video_settings["autoSyncResult"].setdefault("message", None)
     project.setdefault("detectionSummary", {"learnedPatternCount": 0, "confidentPendingCount": 0, "acceptedCount": 0})
     project["detectionSummary"].setdefault("learnedPatternCount", 0)
     project["detectionSummary"].setdefault("confidentPendingCount", 0)
@@ -887,4 +922,65 @@ def _default_mastering_controls() -> dict[str, float | str | None]:
         "limiterStrength": 55,
         "stereoWidth": 55,
         "outputFormat": "WAV 16-bit",
+    }
+
+
+def _default_video_editor_settings() -> dict[str, Any]:
+    return {
+        "rawVideo": None,
+        "rawVideos": [],
+        "selectedAudioAssetId": None,
+        "selectedAudioAssetKind": None,
+        "selectedAudioAssetPath": None,
+        "useSelectedMasterAudio": True,
+        "useOriginalVideoAudio": False,
+        "audioOffsetMs": 0,
+        "trimStartSeconds": 0,
+        "trimEndSeconds": 0,
+        "fadeInSeconds": 0,
+        "fadeOutSeconds": 0,
+        "exportPreset": "YouTube 1080p",
+        "assembly": {
+            "transitionStyle": "Crossfade",
+            "transitionDurationSeconds": 0.45,
+        },
+        "overlay": {
+            "songTitle": None,
+            "artistName": None,
+            "sessionLabel": None,
+            "position": "Lower Left",
+            "style": "Boxed",
+            "size": "Medium",
+        },
+        "watermark": {
+            "enabled": False,
+            "logo": None,
+            "position": "Top Right",
+            "opacity": 0.82,
+            "scale": 0.14,
+        },
+        "introCard": {
+            "enabled": False,
+            "durationSeconds": 2.5,
+            "title": None,
+            "subtitle": None,
+        },
+        "outroCard": {
+            "enabled": False,
+            "durationSeconds": 2.5,
+            "title": None,
+            "subtitle": None,
+        },
+        "autoSyncResult": {
+            "status": "Not Run",
+            "offsetMs": None,
+            "confidence": None,
+            "analyzedAt": None,
+            "message": None,
+        },
+        "brandingTemplates": [],
+        "previewRender": None,
+        "finalExport": None,
+        "finalExports": [],
+        "updatedAt": None,
     }

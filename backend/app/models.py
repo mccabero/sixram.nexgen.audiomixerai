@@ -98,6 +98,52 @@ class ExportMixRequest(BaseModel):
     trimEndSeconds: float = Field(default=0, ge=0)
 
 
+class VideoFocusPlacement(BaseModel):
+    id: str | None = None
+    clipId: str
+    startSeconds: float = Field(default=0, ge=0)
+    durationSeconds: float | None = Field(default=None, ge=0.25)
+    sourceStartSeconds: float = Field(default=0, ge=0)
+
+
+class UpdateVideoEditorSettingsRequest(BaseModel):
+    selectedAudioAssetId: str | None = None
+    useSelectedMasterAudio: bool | None = None
+    useOriginalVideoAudio: bool | None = None
+    clipOrderIds: list[str] | None = None
+    audioOffsetMs: int | None = Field(default=None, ge=-600000, le=600000)
+    trimStartSeconds: float | None = Field(default=None, ge=0)
+    trimEndSeconds: float | None = Field(default=None, ge=0)
+    fadeInSeconds: float | None = Field(default=None, ge=0, le=8)
+    fadeOutSeconds: float | None = Field(default=None, ge=0, le=8)
+    exportPreset: str | None = None
+    transitionStyle: str | None = None
+    transitionDurationSeconds: float | None = Field(default=None, ge=0, le=2)
+    focusPlacements: list[VideoFocusPlacement] | None = None
+    songTitle: str | None = Field(default=None, max_length=120)
+    artistName: str | None = Field(default=None, max_length=120)
+    sessionLabel: str | None = Field(default=None, max_length=120)
+    overlayPosition: str | None = None
+    overlayStyle: str | None = None
+    overlaySize: str | None = None
+    watermarkEnabled: bool | None = None
+    watermarkPosition: str | None = None
+    watermarkOpacity: float | None = Field(default=None, ge=0.05, le=1)
+    watermarkScale: float | None = Field(default=None, ge=0.05, le=0.5)
+    introEnabled: bool | None = None
+    introDurationSeconds: float | None = Field(default=None, ge=0.5, le=10)
+    introTitle: str | None = Field(default=None, max_length=120)
+    introSubtitle: str | None = Field(default=None, max_length=180)
+    outroEnabled: bool | None = None
+    outroDurationSeconds: float | None = Field(default=None, ge=0.5, le=10)
+    outroTitle: str | None = Field(default=None, max_length=120)
+    outroSubtitle: str | None = Field(default=None, max_length=180)
+
+
+class CreateVideoBrandingTemplateRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=80)
+
+
 class ProjectBackupRequest(BaseModel):
     includeOriginalStems: bool = False
 
@@ -518,6 +564,163 @@ class ExportFile(BaseModel):
     warnings: list[str] = Field(default_factory=list)
 
 
+class VideoRawFile(BaseModel):
+    id: str
+    projectId: str
+    role: str = "Primary"
+    originalFilename: str
+    storedFilename: str
+    filePath: str
+    fileUrl: str
+    fileSize: int
+    uploadedAt: str
+    durationSeconds: float | None = None
+    width: int | None = None
+    height: int | None = None
+    fps: float | None = None
+    hasAudioTrack: bool = False
+
+
+class VideoAssemblySettings(BaseModel):
+    transitionStyle: str = "Crossfade"
+    transitionDurationSeconds: float = 0.45
+    focusPlacements: list[VideoFocusPlacement] = Field(default_factory=list)
+
+
+class VideoLogoFile(BaseModel):
+    id: str
+    projectId: str
+    originalFilename: str
+    storedFilename: str
+    filePath: str
+    fileUrl: str
+    fileSize: int
+    uploadedAt: str
+
+
+class VideoAudioAsset(BaseModel):
+    id: str
+    kind: str
+    label: str
+    filePath: str
+    fileUrl: str
+    createdAt: str | None = None
+    durationSeconds: float | None = None
+    outputFormat: str | None = None
+
+
+class VideoOverlaySettings(BaseModel):
+    songTitle: str | None = None
+    artistName: str | None = None
+    sessionLabel: str | None = None
+    position: str = "Lower Left"
+    style: str = "Boxed"
+    size: str = "Medium"
+
+
+class VideoWatermarkSettings(BaseModel):
+    enabled: bool = False
+    logo: VideoLogoFile | None = None
+    position: str = "Top Right"
+    opacity: float = 0.82
+    scale: float = 0.14
+
+
+class VideoTitleCardSettings(BaseModel):
+    enabled: bool = False
+    durationSeconds: float = 2.5
+    title: str | None = None
+    subtitle: str | None = None
+
+
+class VideoAutoSyncResult(BaseModel):
+    status: str = "Not Run"
+    offsetMs: int | None = None
+    confidence: float | None = None
+    analyzedAt: str | None = None
+    message: str | None = None
+
+
+class VideoBrandingTemplate(BaseModel):
+    id: str
+    name: str
+    createdAt: str
+    updatedAt: str
+    overlay: VideoOverlaySettings = Field(default_factory=VideoOverlaySettings)
+    watermark: VideoWatermarkSettings = Field(default_factory=VideoWatermarkSettings)
+    introCard: VideoTitleCardSettings = Field(default_factory=VideoTitleCardSettings)
+    outroCard: VideoTitleCardSettings = Field(default_factory=VideoTitleCardSettings)
+
+
+class VideoWaveformTrack(BaseModel):
+    label: str
+    peaks: list[float] = Field(default_factory=list)
+    previewDurationSeconds: float | None = None
+
+
+class VideoWaveformStateResponse(BaseModel):
+    offsetMs: int = 0
+    windowDurationSeconds: float | None = None
+    rawVideo: VideoWaveformTrack | None = None
+    selectedAudio: VideoWaveformTrack | None = None
+
+
+class VideoExportFile(BaseModel):
+    id: str
+    projectId: str
+    label: str
+    createdAt: str
+    filePath: str
+    fileUrl: str
+    sizeBytes: int | None = None
+    durationSeconds: float | None = None
+    width: int | None = None
+    height: int | None = None
+    fps: float | None = None
+    sourceVideoFilename: str | None = None
+    secondaryVideoFilenames: list[str] = Field(default_factory=list)
+    sourceVideoFilenames: list[str] = Field(default_factory=list)
+    clipCount: int = 0
+    sourceAudioAssetId: str | None = None
+    sourceAudioAssetLabel: str | None = None
+    sourceAudioAssetKind: str | None = None
+    exportPreset: str | None = None
+    settings: dict = Field(default_factory=dict)
+    warnings: list[str] = Field(default_factory=list)
+
+
+class VideoEditorSettings(BaseModel):
+    rawVideo: VideoRawFile | None = None
+    rawVideos: list[VideoRawFile] = Field(default_factory=list)
+    selectedAudioAssetId: str | None = None
+    selectedAudioAssetKind: str | None = None
+    selectedAudioAssetPath: str | None = None
+    useSelectedMasterAudio: bool = True
+    useOriginalVideoAudio: bool = False
+    audioOffsetMs: int = 0
+    trimStartSeconds: float = 0
+    trimEndSeconds: float = 0
+    fadeInSeconds: float = 0
+    fadeOutSeconds: float = 0
+    exportPreset: str = "YouTube 1080p"
+    assembly: VideoAssemblySettings = Field(default_factory=VideoAssemblySettings)
+    overlay: VideoOverlaySettings = Field(default_factory=VideoOverlaySettings)
+    watermark: VideoWatermarkSettings = Field(default_factory=VideoWatermarkSettings)
+    introCard: VideoTitleCardSettings = Field(default_factory=VideoTitleCardSettings)
+    outroCard: VideoTitleCardSettings = Field(default_factory=VideoTitleCardSettings)
+    autoSyncResult: VideoAutoSyncResult = Field(default_factory=VideoAutoSyncResult)
+    brandingTemplates: list[VideoBrandingTemplate] = Field(default_factory=list)
+    previewRender: VideoExportFile | None = None
+    finalExport: VideoExportFile | None = None
+    finalExports: list[VideoExportFile] = Field(default_factory=list)
+    updatedAt: str | None = None
+
+
+class VideoEditorStateResponse(BaseModel):
+    settings: VideoEditorSettings
+    availableAudioAssets: list[VideoAudioAsset] = Field(default_factory=list)
+
+
 class MasteringSettings(BaseModel):
     controls: MasteringControls = Field(default_factory=MasteringControls)
     masterVersions: list[MasterVersion] = Field(default_factory=list)
@@ -565,6 +768,7 @@ class Project(BaseModel):
     processingJobs: list[ProcessingJob] = Field(default_factory=list)
     mixSettings: MixSettings = Field(default_factory=MixSettings)
     masteringSettings: MasteringSettings = Field(default_factory=MasteringSettings)
+    videoEditorSettings: VideoEditorSettings = Field(default_factory=VideoEditorSettings)
     detectionSummary: DetectionSummary = Field(default_factory=DetectionSummary)
 
 

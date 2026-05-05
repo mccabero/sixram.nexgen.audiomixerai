@@ -60,6 +60,68 @@ export function stopDirectRecording(projectId) {
   });
 }
 
+export function getVideoEditorState(projectId) {
+  return request(`/projects/${projectId}/video-editor`);
+}
+
+export function updateVideoEditorSettings(projectId, updates) {
+  return request(`/projects/${projectId}/video-editor/settings`, {
+    method: "PATCH",
+    body: JSON.stringify(updates),
+  });
+}
+
+export function getVideoWaveforms(projectId) {
+  return request(`/projects/${projectId}/video-editor/waveforms`);
+}
+
+export function createVideoBrandingTemplate(projectId, payload) {
+  return request(`/projects/${projectId}/video-editor/templates`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function applyVideoBrandingTemplate(projectId, templateId) {
+  return request(`/projects/${projectId}/video-editor/templates/${templateId}/apply`, {
+    method: "POST",
+  });
+}
+
+export function deleteVideoBrandingTemplate(projectId, templateId) {
+  return request(`/projects/${projectId}/video-editor/templates/${templateId}`, {
+    method: "DELETE",
+  });
+}
+
+export function startVideoExportJob(projectId) {
+  return request(`/projects/${projectId}/video-editor/export-job`, {
+    method: "POST",
+  });
+}
+
+export function startVideoPreviewJob(projectId) {
+  return request(`/projects/${projectId}/video-editor/preview-job`, {
+    method: "POST",
+  });
+}
+
+export function getVideoExportJob(projectId, jobId) {
+  return request(`/projects/${projectId}/video-editor/jobs/${jobId}`);
+}
+
+export function runVideoAutoSync(projectId) {
+  return request(`/projects/${projectId}/video-editor/auto-sync`, {
+    method: "POST",
+  });
+}
+
+export function deleteVideoExport(projectId, exportId) {
+  return request(`/projects/${projectId}/video-editor/exports/${exportId}`, {
+    method: "DELETE",
+  });
+}
+
 export function getProjectLogs(projectId, limit = 120) {
   return request(`/projects/${projectId}/logs?limit=${encodeURIComponent(limit)}`);
 }
@@ -416,6 +478,74 @@ export function uploadStems(projectId, files, onProgress) {
           resolve(payload);
         } else {
           reject(new Error(payload.detail || "Upload failed."));
+        }
+      } catch (error) {
+        reject(error);
+      }
+    };
+
+    xhr.onerror = () => reject(new Error("Could not reach the local API."));
+    xhr.send(formData);
+  });
+}
+
+export function uploadRawVideo(projectId, file, role = "auto", onProgress) {
+  return new Promise((resolve, reject) => {
+    const formData = new FormData();
+    formData.append("file", file);
+
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", `${API_BASE}/projects/${projectId}/video-editor/raw-video?role=${encodeURIComponent(role)}`);
+
+    xhr.upload.onprogress = (event) => {
+      if (!event.lengthComputable || !onProgress) return;
+      onProgress(Math.round((event.loaded / event.total) * 100));
+    };
+
+    xhr.onload = () => {
+      try {
+        const payload = JSON.parse(xhr.responseText || "{}");
+        if (xhr.status >= 200 && xhr.status < 300) {
+          resolve(payload);
+        } else {
+          reject(new Error(payload.detail || "Video upload failed."));
+        }
+      } catch (error) {
+        reject(error);
+      }
+    };
+
+    xhr.onerror = () => reject(new Error("Could not reach the local API."));
+    xhr.send(formData);
+  });
+}
+
+export function deleteVideoRawClip(projectId, clipId) {
+  return request(`/projects/${projectId}/video-editor/raw-videos/${clipId}`, {
+    method: "DELETE",
+  });
+}
+
+export function uploadVideoWatermarkLogo(projectId, file, onProgress) {
+  return new Promise((resolve, reject) => {
+    const formData = new FormData();
+    formData.append("file", file);
+
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", `${API_BASE}/projects/${projectId}/video-editor/watermark-logo`);
+
+    xhr.upload.onprogress = (event) => {
+      if (!event.lengthComputable || !onProgress) return;
+      onProgress(Math.round((event.loaded / event.total) * 100));
+    };
+
+    xhr.onload = () => {
+      try {
+        const payload = JSON.parse(xhr.responseText || "{}");
+        if (xhr.status >= 200 && xhr.status < 300) {
+          resolve(payload);
+        } else {
+          reject(new Error(payload.detail || "Logo upload failed."));
         }
       } catch (error) {
         reject(error);

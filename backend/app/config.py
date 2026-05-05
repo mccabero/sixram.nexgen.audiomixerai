@@ -11,8 +11,14 @@ DB_PATH = STORAGE_ROOT / "app_data.json"
 
 MAX_UPLOAD_MB = int(os.getenv("AUDIO_MIXER_MAX_UPLOAD_MB", "500"))
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
+MAX_VIDEO_UPLOAD_MB = int(os.getenv("AUDIO_MIXER_MAX_VIDEO_UPLOAD_MB", "2048"))
+MAX_VIDEO_UPLOAD_BYTES = MAX_VIDEO_UPLOAD_MB * 1024 * 1024
+MAX_VIDEO_LOGO_UPLOAD_MB = int(os.getenv("AUDIO_MIXER_MAX_VIDEO_LOGO_UPLOAD_MB", "25"))
+MAX_VIDEO_LOGO_UPLOAD_BYTES = MAX_VIDEO_LOGO_UPLOAD_MB * 1024 * 1024
 
 ALLOWED_EXTENSIONS = {".wav", ".mp3", ".flac", ".aiff", ".aif", ".webm"}
+ALLOWED_VIDEO_EXTENSIONS = {".mp4", ".mov", ".m4v", ".webm", ".mkv"}
+ALLOWED_VIDEO_LOGO_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp"}
 
 STEM_TYPES = [
     "Unknown",
