@@ -7,10 +7,13 @@ Local-only React/FastAPI app for uploading stems, analyzing, cleaning, enhancing
 Backend:
 
 ```powershell
-cd backend
-.\.venv\Scripts\Activate.ps1
-uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+.\run-backend.ps1
 ```
+
+If PowerShell blocks local scripts, run `.\run-backend.cmd` instead.
+
+The script creates `backend\.venv` if needed, installs `backend\requirements.txt`
+when it changes, and starts FastAPI at `http://127.0.0.1:8000`.
 
 Frontend:
 

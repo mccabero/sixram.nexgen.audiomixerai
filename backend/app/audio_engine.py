@@ -219,7 +219,7 @@ def clean_audio_file(path: Path, output_path: Path, stem_type: str, mode: str, h
     info = _probe_audio(path)
     _progress(progress_callback, 0.15, "Decoding source stem")
     decoded = _decode_audio(path, sample_rate=info["sampleRate"], channels=info["channels"])
-    audio = decoded.samples.astype(np.float32, copy=True)
+    audio = _sanitize_audio(decoded.samples.astype(np.float32, copy=True))
     params = _cleaning_parameters(stem_type, mode)
     operations: list[str] = []
     warnings: list[str] = []
@@ -234,54 +234,53 @@ def clean_audio_file(path: Path, output_path: Path, stem_type: str, mode: str, h
 
     if hum_removal:
         _progress(progress_callback, 0.34, "Reducing electrical hum")
-        audio = _remove_hum(audio, decoded.sample_rate, hum_frequency, params["humStrength"])
+        audio = _sanitize_audio(_remove_hum(audio, decoded.sample_rate, hum_frequency, params["humStrength"]))
         operations.append(f"{hum_frequency} Hz hum reduction")
 
     if params["highPassHz"]:
         _progress(progress_callback, 0.42, "Applying high-pass cleanup")
-        audio = _high_pass(audio, decoded.sample_rate, params["highPassHz"])
+        audio = _sanitize_audio(_high_pass(audio, decoded.sample_rate, params["highPassHz"]))
         operations.append(f"high-pass filter at {params['highPassHz']} Hz")
 
     if params["plosiveReduction"]:
         _progress(progress_callback, 0.50, "Reducing plosives")
-        audio = _reduce_plosives(audio, decoded.sample_rate, params["plosiveReduction"])
+        audio = _sanitize_audio(_reduce_plosives(audio, decoded.sample_rate, params["plosiveReduction"]))
         operations.append("plosive reduction")
 
     if params["noiseReduction"]:
         _progress(progress_callback, 0.58, "Building noise reduction profile")
         noise_profile = _noise_profile(audio, decoded.sample_rate)
         _progress(progress_callback, 0.64, "Reducing noise")
-        audio = _reduce_noise(audio, decoded.sample_rate, params["noiseReduction"], noise_profile=noise_profile)
+        audio = _sanitize_audio(_reduce_noise(audio, decoded.sample_rate, params["noiseReduction"], noise_profile=noise_profile))
         operations.append("profile-based noise reduction" if noise_profile is not None else "adaptive noise reduction")
 
     if params["noiseGate"]:
         _progress(progress_callback, 0.70, "Applying noise gate")
-        audio = _noise_gate(audio, decoded.sample_rate, params["noiseGate"], params["gateFloor"])
+        audio = _sanitize_audio(_noise_gate(audio, decoded.sample_rate, params["noiseGate"], params["gateFloor"]))
         operations.append("noise gate")
 
     if params["deEss"]:
         _progress(progress_callback, 0.76, "Softening harsh sibilance")
-        audio = _de_ess(audio, decoded.sample_rate, params["deEss"])
+        audio = _sanitize_audio(_de_ess(audio, decoded.sample_rate, params["deEss"]))
         operations.append("de-esser")
 
     if params["compressionPrep"]:
         _progress(progress_callback, 0.82, "Preparing dynamics")
-        audio = _compression_prepare(audio, params["compressionPrep"])
+        audio = _sanitize_audio(_compression_prepare(audio, params["compressionPrep"]))
         operations.append("light compression preparation")
 
     if params["clickReduction"]:
         _progress(progress_callback, 0.86, "Reducing clicks and pops")
-        audio = _reduce_clicks(audio, params["clickReduction"])
+        audio = _sanitize_audio(_reduce_clicks(audio, params["clickReduction"]))
         operations.append("click/pop reduction")
 
     if params["tailCleanup"]:
         _progress(progress_callback, 0.90, "Cleaning silent tail")
-        audio = _cleanup_silent_tail(audio, decoded.sample_rate)
+        audio = _sanitize_audio(_cleanup_silent_tail(audio, decoded.sample_rate))
         operations.append("silence tail cleanup")
         warnings.append("Leading silence is preserved so stems stay aligned in the mix.")
 
-    audio = np.nan_to_num(audio, nan=0.0, posinf=0.0, neginf=0.0)
-    audio = np.clip(audio, -0.98, 0.98).astype(np.float32, copy=False)
+    audio = _sanitize_audio(audio, clip=0.98)
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     _progress(progress_callback, 0.94, "Writing cleaned WAV")
@@ -1142,17 +1141,26 @@ def _band_pass(audio: np.ndarray, sample_rate: int, low_hz: float, high_hz: floa
     return _safe_sos_filter(sos, audio)
 
 
+def _sanitize_audio(audio: np.ndarray, clip: float | None = 1.0) -> np.ndarray:
+    cleaned = np.nan_to_num(audio, nan=0.0, posinf=0.0, neginf=0.0)
+    if clip is not None:
+        limit = max(0.1, min(1.5, float(clip)))
+        cleaned = np.clip(cleaned, -limit, limit)
+    return cleaned.astype(np.float32, copy=False)
+
+
 def _safe_sos_filter(sos: np.ndarray, audio: np.ndarray) -> np.ndarray:
+    audio = _sanitize_audio(audio)
     try:
         if audio.shape[0] > 64:
-            return signal.sosfiltfilt(sos, audio, axis=0).astype(np.float32, copy=False)
+            return _sanitize_audio(signal.sosfiltfilt(sos, audio, axis=0))
     except Exception:
         pass
-    return signal.sosfilt(sos, audio, axis=0).astype(np.float32, copy=False)
+    return _sanitize_audio(signal.sosfilt(sos, audio, axis=0))
 
 
 def _remove_hum(audio: np.ndarray, sample_rate: int, frequency: int, strength: float) -> np.ndarray:
-    cleaned = audio
+    cleaned = _sanitize_audio(audio)
     base = 50 if int(frequency) == 50 else 60
     harmonics = [base * index for index in range(1, 8) if base * index < sample_rate / 2 - 50]
     q = max(18.0, 42.0 - strength * 18.0)
@@ -1165,11 +1173,14 @@ def _remove_hum(audio: np.ndarray, sample_rate: int, frequency: int, strength: f
                 filtered = signal.lfilter(b, a, cleaned, axis=0)
         except Exception:
             filtered = signal.lfilter(b, a, cleaned, axis=0)
-        cleaned = (cleaned * (1.0 - strength) + filtered * strength).astype(np.float32, copy=False)
+        cleaned = _sanitize_audio(cleaned * (1.0 - strength) + filtered * strength)
     return cleaned
 
 
 def _reduce_noise(audio: np.ndarray, sample_rate: int, strength: float, noise_profile: np.ndarray | None = None) -> np.ndarray:
+    audio = _sanitize_audio(audio)
+    if noise_profile is not None:
+        noise_profile = _sanitize_audio(noise_profile)
     strength = max(0.0, min(0.9, strength))
     if strength <= 0:
         return audio
@@ -1180,13 +1191,14 @@ def _reduce_noise(audio: np.ndarray, sample_rate: int, strength: float, noise_pr
                 y_noise = noise_profile[:, channel_index] if noise_profile is not None and noise_profile.size else None
                 reduced = nr.reduce_noise(y=audio[:, channel_index], sr=sample_rate, y_noise=y_noise, prop_decrease=strength, stationary=False)
                 channels.append(reduced)
-            return np.stack(channels, axis=1).astype(np.float32, copy=False)
+            return _sanitize_audio(np.stack(channels, axis=1))
         except Exception:
             pass
     return _spectral_noise_reduction(audio, sample_rate, strength)
 
 
 def _noise_profile(audio: np.ndarray, sample_rate: int) -> np.ndarray | None:
+    audio = _sanitize_audio(audio)
     frame_size = max(512, int(sample_rate * 0.05))
     if audio.shape[0] < frame_size * 4:
         return None
@@ -1206,6 +1218,7 @@ def _noise_profile(audio: np.ndarray, sample_rate: int) -> np.ndarray | None:
 
 
 def _spectral_noise_reduction(audio: np.ndarray, sample_rate: int, strength: float) -> np.ndarray:
+    audio = _sanitize_audio(audio)
     reduced_channels = []
     for channel_index in range(audio.shape[1]):
         channel = audio[:, channel_index]
@@ -1222,7 +1235,7 @@ def _spectral_noise_reduction(audio: np.ndarray, sample_rate: int, strength: flo
         gain = np.where(magnitude < threshold, attenuation, 1.0)
         _freqs, cleaned = signal.istft(stft * gain, fs=sample_rate, nperseg=2048, noverlap=1536)
         reduced_channels.append(_match_length(cleaned, channel.shape[0]))
-    return np.stack(reduced_channels, axis=1).astype(np.float32, copy=False)
+    return _sanitize_audio(np.stack(reduced_channels, axis=1))
 
 
 def _noise_gate(audio: np.ndarray, sample_rate: int, strength: float, floor: float) -> np.ndarray:
