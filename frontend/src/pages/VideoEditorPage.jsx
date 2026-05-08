@@ -698,6 +698,33 @@ export default function VideoEditorPage() {
     return <ProcessingPanel title="Loading Video Editor" message="Reading video assets, master files, and editor settings." />;
   }
 
+  const hasMaster = Boolean(project?.masteringSettings?.masterVersions?.length);
+
+  if (!hasMaster) {
+    return (
+      <div>
+        <Link to={`/projects/${projectId}`} className="inline-flex items-center gap-2 text-sm text-zinc-300 hover:text-white">
+          <ArrowLeft size={16} />
+          Back to project
+        </Link>
+
+        <section className="mt-6">
+          <EmptyState
+            icon={LockKeyhole}
+            title="Master required"
+            description="Finish the mastering step before opening the Video Editor. The editor uses the completed master as the soundtrack for video sync, preview, and export."
+            action={
+              <Button as={Link} to={`/projects/${projectId}/mastering`}>
+                <Sparkles size={17} />
+                Open Mastering
+              </Button>
+            }
+          />
+        </section>
+      </div>
+    );
+  }
+
   const actionPanel = actionPanelFor(actionLoading, renderJob, previewJob, uploadProgress, logoProgress, stopVideoJob, stoppingJobId);
 
   return (
@@ -714,6 +741,10 @@ export default function VideoEditorPage() {
           <p className="mt-2 max-w-2xl text-sm leading-6 text-zinc-400">Attach a generated master to one primary whole-band video, add optional secondary focused clips, let the editor assemble the cut automatically, then fine-tune sync, trim, branding, and export a final MP4.</p>
         </div>
         <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
+          <Button as={Link} to={`/projects/${projectId}/mastering`} variant="secondary">
+            <ArrowLeft size={17} />
+            Back to Step 6
+          </Button>
           <Button type="button" variant="secondary" onClick={refreshState} disabled={actionLoading === "refresh" || videoJobRunning}>
             <RefreshCw size={17} />
             Refresh

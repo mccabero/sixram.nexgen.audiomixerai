@@ -71,6 +71,14 @@ def update_stem_cleaning_settings(project_id: str, stem_id: str, payload: Update
 
 
 def create_cleaning_job(project_id: str) -> ProcessingJob:
+    return _create_cleaning_job(project_id)
+
+
+def create_stem_cleaning_job(project_id: str, stem_id: str) -> ProcessingJob:
+    return _create_cleaning_job(project_id, stem_id=stem_id)
+
+
+def _create_cleaning_job(project_id: str, stem_id: str | None = None) -> ProcessingJob:
     try:
         ensure_audio_environment()
     except RuntimeError as exc:
@@ -79,7 +87,10 @@ def create_cleaning_job(project_id: str) -> ProcessingJob:
     project = _find_project(data, project_id)
     if not project.get("stems"):
         raise HTTPException(status_code=400, detail="Upload stems before running cleaning.")
-    if not _enabled_stems(project):
+    target_stem = _find_stem(project, stem_id) if stem_id else None
+    if not _enabled_stems(project, target_ids={stem_id} if stem_id else None):
+        if target_stem:
+            raise HTTPException(status_code=400, detail="Enable cleaning and choose a cleaning mode for this stem first.")
         raise HTTPException(status_code=400, detail="Enable cleaning for at least one stem before running cleaning.")
 
     active_job = next(
@@ -101,16 +112,19 @@ def create_cleaning_job(project_id: str) -> ProcessingJob:
         "status": "Pending",
         "progress": 0,
         "currentStemId": None,
-        "message": "Cleaning queued.",
+        "message": f"Cleaning queued for {target_stem['originalFilename']}." if target_stem else "Cleaning queued.",
         "errors": [],
         "createdAt": now,
         "updatedAt": now,
         "completedAt": None,
     }
+    if stem_id:
+        job["targetStemIds"] = [stem_id]
     project.setdefault("processingJobs", []).append(job)
     project["updatedAt"] = now
     store.save(data)
-    append_project_log(project_subdirs(project_id)["logs"], f"Cleaning job {job['id']} queued.")
+    target_label = f" for {target_stem['originalFilename']}" if target_stem else ""
+    append_project_log(project_subdirs(project_id)["logs"], f"Cleaning job {job['id']} queued{target_label}.")
     return ProcessingJob(**job)
 
 
@@ -177,8 +191,13 @@ def _run_cleaning_job(project_id: str, job_id: str) -> None:
 
     data = store.load()
     project = _find_project(data, project_id)
-    stems = _enabled_stems(project)
+    job = _find_job(project, job_id)
+    target_ids = set(job.get("targetStemIds") or [])
+    stems = _enabled_stems(project, target_ids=target_ids or None)
     total = len(stems)
+    if total == 0:
+        _fail_job(project_id, job_id, "No enabled stems were available for cleaning.")
+        return
     successes = 0
 
     for index, stem in enumerate(stems, start=1):
@@ -291,9 +310,11 @@ def _run_cleaning_job(project_id: str, job_id: str) -> None:
     append_project_log(project_subdirs(project_id)["logs"], f"Cleaning job {job_id} {final_status.lower()}.")
 
 
-def _enabled_stems(project: dict[str, Any]) -> list[dict[str, Any]]:
+def _enabled_stems(project: dict[str, Any], target_ids: set[str] | None = None) -> list[dict[str, Any]]:
     enabled = []
     for stem in project.get("stems", []):
+        if target_ids is not None and stem.get("id") not in target_ids:
+            continue
         settings = _ensure_cleaning_settings(stem)
         if settings.get("enabled") and settings.get("mode") != "Off":
             enabled.append(stem)

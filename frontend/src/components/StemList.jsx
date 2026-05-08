@@ -5,6 +5,11 @@ import Button from "./Button.jsx";
 import StatusBadge from "./StatusBadge.jsx";
 
 export default function StemList({ stems, onChangeType, onAcceptDetection, onDelete, busyStemId }) {
+  const hasActions = Boolean(onAcceptDetection || onDelete);
+  const gridColumns = hasActions
+    ? "xl:grid-cols-[minmax(220px,1.4fr)_190px_170px_110px_120px_120px]"
+    : "xl:grid-cols-[minmax(220px,1.4fr)_190px_170px_110px_120px]";
+
   if (!stems?.length) {
     return (
       <div className="rounded-lg border border-dashed border-white/14 bg-white/[0.03] px-5 py-10 text-center">
@@ -17,20 +22,20 @@ export default function StemList({ stems, onChangeType, onAcceptDetection, onDel
     <div className="overflow-hidden rounded-lg border border-white/10 bg-white/[0.035]">
       <div className="overflow-x-auto">
         <div className="xl:min-w-[1060px]">
-          <div className="hidden grid-cols-[minmax(220px,1.4fr)_190px_170px_110px_120px_120px] gap-4 border-b border-white/10 px-4 py-3 text-xs font-semibold uppercase tracking-[0.14em] text-zinc-500 xl:grid">
+          <div className={`hidden ${gridColumns} gap-4 border-b border-white/10 px-4 py-3 text-xs font-semibold uppercase tracking-[0.14em] text-zinc-500 xl:grid`}>
             <span>Stem</span>
             <span>Type</span>
             <span>Detected</span>
             <span>Size</span>
             <span>Status</span>
-            <span className="text-right">Actions</span>
+            {hasActions ? <span className="text-right">Actions</span> : null}
           </div>
           <div className="divide-y divide-white/10">
             {stems.map((stem) => {
               const detection = stem.detectionResult;
               const canAccept = detection && detection.suggestedStemType !== "Unknown" && detection.confidence >= 60 && !detection.accepted;
               return (
-                <div key={stem.id} className="grid gap-4 px-4 py-4 xl:grid-cols-[minmax(220px,1.4fr)_190px_170px_110px_120px_120px] xl:items-center">
+                <div key={stem.id} className={`grid gap-4 px-4 py-4 ${gridColumns} xl:items-center`}>
                   <div className="min-w-0">
                     <div className="flex items-start justify-between gap-3">
                       <p className="min-w-0 truncate font-medium text-white">{stem.originalFilename}</p>
@@ -78,33 +83,35 @@ export default function StemList({ stems, onChangeType, onAcceptDetection, onDel
                     <span className="mb-2 block text-xs uppercase tracking-[0.12em] text-zinc-500 xl:hidden">Status</span>
                     <StatusBadge status={stem.status} />
                   </div>
-                  <div className="flex justify-start gap-2 xl:justify-end">
-                    {onAcceptDetection ? (
-                      <Button
-                        type="button"
-                        variant="secondary"
-                        className="h-10 px-3"
-                        onClick={() => onAcceptDetection(stem.id)}
-                        disabled={!canAccept || busyStemId === stem.id}
-                        title={canAccept ? "Accept detected stem type" : "No confident detection to accept"}
-                      >
-                        Accept
-                      </Button>
-                    ) : null}
-                    {onDelete ? (
-                      <Button
-                        type="button"
-                        variant="danger"
-                        className="hidden h-10 w-10 px-0 xl:inline-flex"
-                        onClick={() => onDelete(stem.id)}
-                        disabled={busyStemId === stem.id}
-                        aria-label={`Delete ${stem.originalFilename}`}
-                        title="Delete stem"
-                      >
-                        <Trash2 size={16} />
-                      </Button>
-                    ) : null}
-                  </div>
+                  {hasActions ? (
+                    <div className="flex justify-start gap-2 xl:justify-end">
+                      {onAcceptDetection ? (
+                        <Button
+                          type="button"
+                          variant="secondary"
+                          className="h-10 px-3"
+                          onClick={() => onAcceptDetection(stem.id)}
+                          disabled={!canAccept || busyStemId === stem.id}
+                          title={canAccept ? "Accept detected stem type" : "No confident detection to accept"}
+                        >
+                          Accept
+                        </Button>
+                      ) : null}
+                      {onDelete ? (
+                        <Button
+                          type="button"
+                          variant="danger"
+                          className="hidden h-10 w-10 px-0 xl:inline-flex"
+                          onClick={() => onDelete(stem.id)}
+                          disabled={busyStemId === stem.id}
+                          aria-label={`Delete ${stem.originalFilename}`}
+                          title="Delete stem"
+                        >
+                          <Trash2 size={16} />
+                        </Button>
+                      ) : null}
+                    </div>
+                  ) : null}
                 </div>
               );
             })}

@@ -239,6 +239,18 @@ export function startCleaning(projectId) {
   });
 }
 
+export function startStemCleaning(projectId, stemId) {
+  return request(`/projects/${projectId}/stems/${stemId}/cleaning-job`, {
+    method: "POST",
+  });
+}
+
+export function revertCleanedStem(projectId, stemId) {
+  return request(`/projects/${projectId}/stems/${stemId}/cleaned-stem`, {
+    method: "DELETE",
+  });
+}
+
 export function deleteCleanedStems(projectId) {
   return request(`/projects/${projectId}/cleaned-stems`, {
     method: "DELETE",
@@ -306,6 +318,18 @@ export function applyVocalDoctorFix(projectId, stemId) {
 export function startVocalEnhancement(projectId) {
   return request(`/projects/${projectId}/enhance-vocals`, {
     method: "POST",
+  });
+}
+
+export function startStemVocalEnhancement(projectId, stemId) {
+  return request(`/projects/${projectId}/stems/${stemId}/vocal-enhancement-job`, {
+    method: "POST",
+  });
+}
+
+export function revertVocalEnhancement(projectId, stemId) {
+  return request(`/projects/${projectId}/stems/${stemId}/vocal-enhancement`, {
+    method: "DELETE",
   });
 }
 

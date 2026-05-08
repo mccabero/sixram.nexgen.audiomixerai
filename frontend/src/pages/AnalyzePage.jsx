@@ -1,4 +1,4 @@
-import { Activity, ArrowLeft, BarChart3, Gauge, RefreshCw, Search, SlidersHorizontal, Trash2, TriangleAlert, WandSparkles, Zap } from "lucide-react";
+import { Activity, ArrowLeft, BarChart3, ChevronDown, Eraser, Gauge, RefreshCw, Search, Settings2, SlidersHorizontal, Trash2, TriangleAlert, WandSparkles, Zap } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { acceptAllStemDetections, acceptStemDetection, cancelProcessingJob, clearDetectionMemory, deleteAnalysisResults, deleteAutoBalance, deleteStemDetections, detectStemTypes, generateAutoBalance, getProcessingJob, getProject, startAnalysis, updateStemType } from "../api.js";
@@ -6,7 +6,6 @@ import Button from "../components/Button.jsx";
 import EmptyState from "../components/EmptyState.jsx";
 import ProcessingPanel from "../components/ProcessingPanel.jsx";
 import StatusBadge from "../components/StatusBadge.jsx";
-import WorkflowGuide from "../components/WorkflowGuide.jsx";
 import { STEM_TYPES } from "../constants.js";
 import { formatDb, formatDuration, formatLufs, formatPercent } from "../utils/format.js";
 
@@ -24,6 +23,7 @@ export default function AnalyzePage() {
   const [busyStemId, setBusyStemId] = useState("");
   const [error, setError] = useState("");
   const [balanceNotice, setBalanceNotice] = useState("");
+  const [showMoreTools, setShowMoreTools] = useState(true);
 
   const stems = project?.stems || [];
   const analysisComplete = stems.length > 0 && stems.every((stem) => stem.analysisStatus === "Completed");
@@ -31,6 +31,10 @@ export default function AnalyzePage() {
   const hasDetections = stems.some((stem) => stem.detectionResult);
   const hasAutoBalance = stems.some((stem) => stem.autoBalanceSuggestion) || Boolean(project?.mixSettings?.autoBalanceGeneratedAt || project?.mixSettings?.autoBalanceAppliedAt);
   const running = job && runningStatuses.has(job.status);
+  const analyzedCount = stems.filter((stem) => stem.analysisStatus === "Completed").length;
+  const detectedCount = stems.filter((stem) => stem.detectionResult || stem.stemTypeSource === "Detected" || stem.stemTypeSource === "Manual" || stem.stemType !== "Unknown").length;
+  const pendingDetectionCount = project?.detectionSummary?.confidentPendingCount || 0;
+  const learnedPatternCount = project?.detectionSummary?.learnedPatternCount || 0;
 
   const latestAnalysisJob = useMemo(() => {
     const jobs = project?.processingJobs?.filter((item) => item.type === "Analysis") || [];
@@ -281,43 +285,99 @@ export default function AnalyzePage() {
         Back to project
       </Link>
 
-      <div className="mt-5 flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
-        <div>
-          <p className="text-sm font-semibold uppercase tracking-[0.18em] text-teal-100/70">Analyze</p>
-          <h1 className="mt-2 text-3xl font-semibold text-white">{project?.songTitle || project?.name || "Stem analysis"}</h1>
-          <p className="mt-2 max-w-2xl text-sm leading-6 text-zinc-400">
-            Measure duration, loudness, peak, RMS, clipping, silence, and noise floor before creating an automatic balance.
-          </p>
+      <section className="mt-5 rounded-lg border border-white/10 bg-gradient-to-br from-white/[0.075] via-white/[0.04] to-teal-300/[0.04] p-5 shadow-[0_24px_80px_rgba(0,0,0,0.24)]">
+        <div className="flex flex-col gap-5 xl:flex-row xl:items-start xl:justify-between">
+          <div className="max-w-3xl">
+            <p className="text-sm font-semibold uppercase tracking-[0.18em] text-teal-100/70">Step 2</p>
+            <h1 className="mt-2 text-3xl font-semibold text-white">Analyze stems</h1>
+            <p className="mt-3 max-w-2xl text-sm leading-6 text-zinc-400">
+              Run one local analysis pass for {project?.songTitle || project?.name || "this project"}. Studio Pilot AI checks levels, warnings, and stem types before mixing.
+            </p>
+          </div>
+          <div className="grid gap-2 sm:grid-cols-3 xl:min-w-[420px]">
+            <StepSummary label="Stems" value={stems.length} />
+            <StepSummary label="Analyzed" value={`${analyzedCount}/${stems.length || 0}`} />
+            <StepSummary label="Typed" value={`${detectedCount}/${stems.length || 0}`} />
+          </div>
         </div>
-        <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
+
+        <div className="mt-5 flex flex-col gap-2 sm:flex-row sm:flex-wrap">
+          <Button type="button" onClick={runAnalysis} disabled={!stems.length || running || actionLoading === "analysis"}>
+            <BarChart3 size={17} />
+            {analysisComplete ? "Re-analyze stems" : "Analyze stems"}
+          </Button>
+          <Button as={Link} to={`/projects/${projectId}/upload`} variant="secondary">
+            <ArrowLeft size={17} />
+            Back to Step 1
+          </Button>
           <Button type="button" variant="secondary" onClick={refreshProject} disabled={actionLoading === "refresh"}>
             <RefreshCw size={17} />
             Refresh
           </Button>
-          <Button type="button" onClick={runAnalysis} disabled={!stems.length || running || actionLoading === "analysis"}>
-            <BarChart3 size={17} />
-            {analysisComplete ? "Re-analyze" : "Analyze Stems"}
-          </Button>
-          <Button type="button" variant="danger" onClick={deleteAnalysis} disabled={!hasAnalysisResults || running || actionLoading === "deleteAnalysis"}>
-            <Trash2 size={17} />
-            Delete Analysis
-          </Button>
-          <Button type="button" variant="secondary" onClick={runAutoBalance} disabled={!analysisComplete || running || actionLoading === "balance"}>
-            <WandSparkles size={17} />
-            Generate Auto Balance
-          </Button>
-          <Button type="button" variant="danger" onClick={removeAutoBalance} disabled={!hasAutoBalance || running || actionLoading === "deleteBalance"}>
-            <Trash2 size={17} />
-            Delete Balance
-          </Button>
-          <Button as={Link} to={`/projects/${projectId}/mixer`} variant="secondary">
-            <SlidersHorizontal size={17} />
-            Mixer
+          <Button type="button" variant="ghost" onClick={() => setShowMoreTools((current) => !current)} aria-expanded={showMoreTools}>
+            <Settings2 size={17} />
+            More tools
+            <ChevronDown size={16} className={`transition ${showMoreTools ? "rotate-180" : ""}`} />
           </Button>
         </div>
-      </div>
+      </section>
 
-      <WorkflowGuide project={project} currentStep="analyze" className="mt-6" onProjectRefresh={loadProject} />
+      {showMoreTools ? (
+        <section className="mt-4 grid gap-3 lg:grid-cols-3">
+          <ToolGroup
+            icon={Search}
+            title="Stem type detection"
+            description={`${pendingDetectionCount} confident suggestion${pendingDetectionCount === 1 ? "" : "s"} waiting. ${learnedPatternCount} learned pattern${learnedPatternCount === 1 ? "" : "s"}.`}
+          >
+            <Button type="button" variant="secondary" onClick={runDetection} disabled={!stems.length || running || actionLoading === "detect"}>
+              <Search size={17} />
+              {actionLoading === "detect" ? "Detecting..." : "Detect types"}
+            </Button>
+            <Button type="button" variant="secondary" onClick={acceptAllDetections} disabled={!pendingDetectionCount || actionLoading === "acceptAll"}>
+              Accept all ({pendingDetectionCount})
+            </Button>
+          </ToolGroup>
+          <ToolGroup icon={WandSparkles} title="Auto balance" description="Create suggested gain and pan moves after analysis is complete.">
+            <Button type="button" variant="secondary" onClick={runAutoBalance} disabled={!analysisComplete || running || actionLoading === "balance"}>
+              <WandSparkles size={17} />
+              Generate balance
+            </Button>
+            <Button type="button" variant="danger" onClick={removeAutoBalance} disabled={!hasAutoBalance || running || actionLoading === "deleteBalance"}>
+              <Trash2 size={17} />
+              Delete balance
+            </Button>
+          </ToolGroup>
+          <ToolGroup icon={Trash2} title="Maintenance" description="Cleanup tools for re-running this step from a clean state.">
+            <Button type="button" variant="danger" onClick={deleteAnalysis} disabled={!hasAnalysisResults || running || actionLoading === "deleteAnalysis"}>
+              <Trash2 size={17} />
+              Delete analysis
+            </Button>
+            <Button type="button" variant="danger" onClick={deleteDetections} disabled={!hasDetections || running || actionLoading === "deleteDetections"}>
+              <Trash2 size={17} />
+              Delete detections
+            </Button>
+            <Button type="button" variant="ghost" onClick={clearMemory} disabled={!learnedPatternCount || actionLoading === "clearMemory"}>
+              Clear memory
+            </Button>
+          </ToolGroup>
+        </section>
+      ) : null}
+
+      {analysisComplete ? (
+        <section className="mt-5 rounded-lg border border-teal-300/30 bg-gradient-to-r from-teal-300/15 via-emerald-300/10 to-white/[0.04] p-4 shadow-[0_0_42px_rgba(45,212,191,0.13)]">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <p className="text-sm font-semibold uppercase tracking-[0.16em] text-teal-100/80">Step 3 is ready</p>
+              <h2 className="mt-1 text-xl font-semibold text-white">Clean stems next</h2>
+              <p className="mt-1 text-sm leading-6 text-zinc-300">Analysis is complete. Review cleanup suggestions before moving to vocals or mixing.</p>
+            </div>
+            <Button as={Link} to={`/projects/${projectId}/cleaning`} className="w-full justify-center sm:w-auto">
+              <Eraser size={17} />
+              Go to Step 3
+            </Button>
+          </div>
+        </section>
+      ) : null}
 
       {error ? <p className="mt-5 rounded-lg border border-rose-300/20 bg-rose-400/10 px-3 py-2 text-sm text-rose-100">{error}</p> : null}
 
@@ -338,40 +398,6 @@ export default function AnalyzePage() {
       ) : null}
 
       <AnalysisOverview stems={stems} />
-
-      <section className="mt-6 rounded-lg border border-white/10 bg-white/[0.035] p-4">
-        <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-          <div>
-            <div className="flex items-center gap-3">
-              <span className="grid h-9 w-9 place-items-center rounded-lg border border-white/10 bg-black/25 text-teal-200">
-                <Search size={17} />
-              </span>
-              <div>
-                <h2 className="font-semibold text-white">Stem Type Detection</h2>
-                <p className="mt-1 text-sm text-zinc-400">
-                  Pending suggestions: {project?.detectionSummary?.confidentPendingCount || 0} - Learned patterns: {project?.detectionSummary?.learnedPatternCount || 0}
-                </p>
-              </div>
-            </div>
-          </div>
-          <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap lg:justify-end">
-            <Button type="button" variant="secondary" onClick={runDetection} disabled={!stems.length || running || actionLoading === "detect"}>
-              <Search size={17} />
-              {actionLoading === "detect" ? "Detecting..." : "Detect Stem Types"}
-            </Button>
-            <Button type="button" variant="danger" onClick={deleteDetections} disabled={!hasDetections || running || actionLoading === "deleteDetections"}>
-              <Trash2 size={17} />
-              Delete Detections
-            </Button>
-            <Button type="button" variant="secondary" onClick={acceptAllDetections} disabled={!project?.detectionSummary?.confidentPendingCount || actionLoading === "acceptAll"}>
-              Accept all ({project?.detectionSummary?.confidentPendingCount || 0})
-            </Button>
-            <Button type="button" variant="ghost" onClick={clearMemory} disabled={!project?.detectionSummary?.learnedPatternCount || actionLoading === "clearMemory"}>
-              Clear memory
-            </Button>
-          </div>
-        </div>
-      </section>
 
       {job ? (
         <section className="mt-6 rounded-lg border border-white/10 bg-white/[0.035] p-4">
@@ -416,6 +442,32 @@ export default function AnalyzePage() {
           />
         )}
       </section>
+    </div>
+  );
+}
+
+function StepSummary({ label, value }) {
+  return (
+    <div className="rounded-lg border border-white/10 bg-black/20 px-3 py-3">
+      <p className="text-xs font-semibold uppercase tracking-[0.12em] text-zinc-500">{label}</p>
+      <p className="mt-1 truncate text-sm font-semibold text-zinc-100">{value}</p>
+    </div>
+  );
+}
+
+function ToolGroup({ icon: Icon, title, description, children }) {
+  return (
+    <div className="rounded-lg border border-white/10 bg-white/[0.04] p-4">
+      <div className="flex items-start gap-3">
+        <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg border border-white/10 bg-black/25 text-teal-200">
+          <Icon size={17} />
+        </span>
+        <div>
+          <h2 className="font-semibold text-white">{title}</h2>
+          <p className="mt-1 text-sm leading-6 text-zinc-400">{description}</p>
+        </div>
+      </div>
+      <div className="mt-4 flex flex-col gap-2 sm:flex-row sm:flex-wrap">{children}</div>
     </div>
   );
 }

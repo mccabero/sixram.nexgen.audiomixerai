@@ -1,4 +1,4 @@
-import { ArrowLeft, Check, Gauge, Headphones, MicOff, Pencil, Play, RefreshCw, RotateCcw, SlidersHorizontal, Sparkles, Trash2, Volume2, WandSparkles, X } from "lucide-react";
+import { ArrowLeft, Check, ChevronDown, Gauge, Headphones, MicOff, Pencil, Play, RefreshCw, RotateCcw, Settings2, SlidersHorizontal, Sparkles, Trash2, Volume2, WandSparkles, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import {
@@ -26,7 +26,6 @@ import EmptyState from "../components/EmptyState.jsx";
 import ProcessingPanel from "../components/ProcessingPanel.jsx";
 import StatusBadge from "../components/StatusBadge.jsx";
 import WaveformPreview from "../components/WaveformPreview.jsx";
-import WorkflowGuide from "../components/WorkflowGuide.jsx";
 import { MIX_PRESETS } from "../constants.js";
 import { formatDateTime, formatDb, formatLufs, formatPan } from "../utils/format.js";
 
@@ -45,6 +44,15 @@ const defaultControls = {
   reverbAmount: 24,
   vocalReverbAmount: 14,
   roomSize: 38,
+};
+const sunoVocalSpaceControls = {
+  vocalReverbAmount: 22,
+  vocalDelayAmount: 8,
+  roomSize: 38,
+};
+const sunoLeadVocalSendSettings = {
+  reverbSend: 20,
+  delaySend: 8,
 };
 const runningStatuses = new Set(["Pending", "Processing", "Cancelling"]);
 
@@ -66,10 +74,12 @@ export default function MixerPage() {
   const [compareB, setCompareB] = useState("");
   const [editingVersionId, setEditingVersionId] = useState("");
   const [versionDraft, setVersionDraft] = useState("");
+  const [showMoreTools, setShowMoreTools] = useState(true);
 
   const stems = project?.stems || [];
   const mixSettings = project?.mixSettings || {};
   const controls = { ...defaultControls, ...(mixSettings.controls || {}) };
+  const leadVocalStems = stems.filter((stem) => stem.stemType === "Lead Vocal" || stem.detectionResult?.suggestedStemType === "Lead Vocal");
   const mixVersions = mixSettings.mixVersions || [];
   const latestVersion = advancedMix || mixVersions.find((version) => version.id === mixSettings.latestMixVersionId) || mixVersions[mixVersions.length - 1] || null;
   const analysisComplete = stems.length > 0 && stems.every((stem) => stem.analysisStatus === "Completed");
@@ -391,6 +401,27 @@ export default function MixerPage() {
     }
   };
 
+  const applySunoVocalSpace = async () => {
+    setActionLoading("vocalSpace");
+    setError("");
+    setRoughMix(null);
+    try {
+      let nextProject = await updateMixControls(projectId, sunoVocalSpaceControls);
+      for (const stem of leadVocalStems) {
+        nextProject = await updateMixStem(projectId, stem.id, sunoLeadVocalSendSettings);
+      }
+      setProject(nextProject);
+      const leadMessage = leadVocalStems.length
+        ? ` Lead vocal send${leadVocalStems.length === 1 ? "" : "s"} set to reverb ${sunoLeadVocalSendSettings.reverbSend}% and delay ${sunoLeadVocalSendSettings.delaySend}%.`
+        : "";
+      setPreviewNotice(`Suno-like vocal space applied.${leadMessage} Generate a new mix version to hear the update.`);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setActionLoading("");
+    }
+  };
+
   const changePreset = async (preset) => {
     setActionLoading("preset");
     setError("");
@@ -475,29 +506,99 @@ export default function MixerPage() {
         Back to project
       </Link>
 
-      <div className="mt-5 flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
-        <div>
-          <p className="text-sm font-semibold uppercase tracking-[0.18em] text-teal-100/70">Mixer</p>
-          <h1 className="mt-2 text-3xl font-semibold text-white">{project?.songTitle || project?.name || "Auto mix"}</h1>
-          <p className="mt-2 max-w-2xl text-sm leading-6 text-zinc-400">Preset-based stem processing with versioned local mix previews.</p>
+      <section className="mt-5 rounded-lg border border-white/10 bg-gradient-to-br from-white/[0.075] via-white/[0.04] to-teal-300/[0.04] p-5 shadow-[0_24px_80px_rgba(0,0,0,0.24)]">
+        <div className="flex flex-col gap-5 xl:flex-row xl:items-start xl:justify-between">
+          <div className="max-w-3xl">
+            <p className="text-sm font-semibold uppercase tracking-[0.18em] text-teal-100/70">Step 5</p>
+            <h1 className="mt-2 text-3xl font-semibold text-white">Mix the song</h1>
+            <p className="mt-3 max-w-2xl text-sm leading-6 text-zinc-400">
+              Balance the stems, choose a mix preset, then render a versioned mix before mastering.
+            </p>
+          </div>
+          <div className="grid gap-2 sm:grid-cols-3 xl:min-w-[420px]">
+            <StepSummary label="Stems" value={stems.length} />
+            <StepSummary label="Balanced" value={`${appliedCount}/${stems.length || 0}`} />
+            <StepSummary label="Mixes" value={mixVersions.length} />
+          </div>
         </div>
-        <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
+
+        <div className="mt-5 flex flex-col gap-2 sm:flex-row sm:flex-wrap">
+          <Button type="button" onClick={runAdvancedMix} disabled={!stems.length || mixRunning}>
+            <Sparkles size={17} />
+            Generate mix
+          </Button>
+          <Button as={Link} to={`/projects/${projectId}/vocals`} variant="secondary">
+            <ArrowLeft size={17} />
+            Back to Step 4
+          </Button>
           <Button type="button" variant="secondary" onClick={refreshProject} disabled={actionLoading === "refresh"}>
             <RefreshCw size={17} />
             Refresh
           </Button>
-          <Button type="button" variant="secondary" onClick={runGenerateAutoBalance} disabled={!analysisComplete || actionLoading === "generate"} title={analysisComplete ? "Generate auto balance" : "Analyze all stems first"}>
-            <WandSparkles size={17} />
-            Generate Auto Balance
-          </Button>
-          <Button type="button" onClick={runAdvancedMix} disabled={!stems.length || mixRunning}>
-            <Sparkles size={17} />
-            Generate Mix
+          <Button type="button" variant="ghost" onClick={() => setShowMoreTools((current) => !current)} aria-expanded={showMoreTools}>
+            <Settings2 size={17} />
+            More tools
+            <ChevronDown size={16} className={`transition ${showMoreTools ? "rotate-180" : ""}`} />
           </Button>
         </div>
-      </div>
+      </section>
 
-      <WorkflowGuide project={project} currentStep="mixer" className="mt-6" onProjectRefresh={loadProject} />
+      {showMoreTools ? (
+        <section className="mt-4 grid gap-3 lg:grid-cols-3">
+          <ToolGroup icon={WandSparkles} title="Auto balance" description={suggestionCount ? `${suggestionCount} suggestion${suggestionCount === 1 ? "" : "s"} ready. ${appliedCount} applied.` : "Generate suggested gain and pan from analysis."}>
+            <Button type="button" variant="secondary" onClick={runGenerateAutoBalance} disabled={!analysisComplete || actionLoading === "generate"} title={analysisComplete ? "Generate auto balance" : "Analyze all stems first"}>
+              <WandSparkles size={17} />
+              Generate balance
+            </Button>
+            <Button type="button" variant="secondary" onClick={runApplyAutoBalance} disabled={!analysisComplete || actionLoading === "apply"}>
+              <SlidersHorizontal size={17} />
+              Apply balance
+            </Button>
+          </ToolGroup>
+          <ToolGroup icon={Play} title="Preview renders" description="Create quick references or a vocal-muted mix without changing your main mix version.">
+            <Button type="button" variant="secondary" onClick={runRoughMix} disabled={!stems.length || actionLoading === "preview"}>
+              <Play size={17} />
+              Rough preview
+            </Button>
+            <Button type="button" variant="secondary" onClick={runInstrumentalMix} disabled={!stems.length || mixRunning}>
+              <MicOff size={17} />
+              Instrumental
+            </Button>
+          </ToolGroup>
+          <ToolGroup icon={RotateCcw} title="Reset and cleanup" description="Restore defaults or remove generated mix outputs when you need a clean pass.">
+            <Button type="button" variant="secondary" onClick={runResetAdvancedMix} disabled={actionLoading === "reset"}>
+              <RotateCcw size={17} />
+              Reset mix
+            </Button>
+            <Button type="button" variant="secondary" onClick={runResetStemProcessing} disabled={!stems.length || actionLoading === "resetStems"}>
+              <RotateCcw size={17} />
+              Reset stems
+            </Button>
+            {mixVersions.length ? (
+              <Button type="button" variant="danger" onClick={removeAllMixVersions}>
+                <Trash2 size={17} />
+                Delete mixes
+              </Button>
+            ) : null}
+          </ToolGroup>
+        </section>
+      ) : null}
+
+      {latestVersion ? (
+        <section className="mt-5 rounded-lg border border-teal-300/30 bg-gradient-to-r from-teal-300/15 via-emerald-300/10 to-white/[0.04] p-4 shadow-[0_0_42px_rgba(45,212,191,0.13)]">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <p className="text-sm font-semibold uppercase tracking-[0.16em] text-teal-100/80">Step 6 is ready</p>
+              <h2 className="mt-1 text-xl font-semibold text-white">Master and export</h2>
+              <p className="mt-1 text-sm leading-6 text-zinc-300">A mix version is ready. Continue to mastering when the balance feels right.</p>
+            </div>
+            <Button as={Link} to={`/projects/${projectId}/mastering`} className="w-full justify-center sm:w-auto">
+              <Sparkles size={17} />
+              Go to Step 6
+            </Button>
+          </div>
+        </section>
+      ) : null}
 
       <section className="mt-6">
         <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -505,13 +606,7 @@ export default function MixerPage() {
             <h2 className="text-xl font-semibold text-white">Stem Processing</h2>
             <p className="mt-1 text-sm text-zinc-400">Per-stem balance, source, dynamics, and send levels.</p>
           </div>
-          <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-            <Button type="button" variant="secondary" onClick={runResetStemProcessing} disabled={!stems.length || actionLoading === "resetStems"} className="sm:w-auto">
-              <RotateCcw size={17} />
-              Reset Stem Processing
-            </Button>
-            {latestVersion ? <StatusBadge status="Advanced Mix Ready" /> : null}
-          </div>
+          {latestVersion ? <StatusBadge status="Advanced Mix Ready" /> : null}
         </div>
         {stems.length ? (
           <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-5">
@@ -558,7 +653,7 @@ export default function MixerPage() {
           {suggestionCount > 0 && appliedCount === 0 ? (
             <Button type="button" onClick={runApplyAutoBalance} disabled={actionLoading === "apply"} className="sm:w-auto">
               <SlidersHorizontal size={17} />
-              Apply Auto Balance
+              Apply balance
             </Button>
           ) : null}
         </section>
@@ -573,10 +668,35 @@ export default function MixerPage() {
           <p className="text-sm font-medium text-amber-100">{previewNotice}</p>
           <Button type="button" variant="secondary" onClick={runAdvancedMix} disabled={!stems.length || mixRunning} className="sm:w-auto">
             <Sparkles size={17} />
-            Generate Mix
+            Generate mix
           </Button>
         </section>
       ) : null}
+
+      <section className="mt-5 rounded-lg border border-teal-300/20 bg-gradient-to-br from-teal-300/[0.08] via-white/[0.04] to-black/20 p-4">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-[0.14em] text-teal-100/70">Vocal Space</p>
+            <h2 className="mt-1 font-semibold text-white">Reverb and delay for vocals</h2>
+            <p className="mt-1 text-sm leading-6 text-zinc-400">Use these after dry vocal enhancement, then generate a new mix.</p>
+          </div>
+          <Button type="button" variant="secondary" onClick={applySunoVocalSpace} disabled={!stems.length || mixRunning || actionLoading === "vocalSpace"} className="lg:w-auto">
+            <WandSparkles size={17} />
+            Suno-like start
+          </Button>
+        </div>
+        <div className="mt-4 grid gap-4 md:grid-cols-3">
+          <ControlSlider label="Vocal Reverb" value={controls.vocalReverbAmount} onChange={(value) => updateControlLocal({ vocalReverbAmount: value })} onCommit={(value) => commitControls({ vocalReverbAmount: value })} />
+          <ControlSlider label="Vocal Delay" value={controls.vocalDelayAmount} onChange={(value) => updateControlLocal({ vocalDelayAmount: value })} onCommit={(value) => commitControls({ vocalDelayAmount: value })} />
+          <ControlSlider label="Room Size" value={controls.roomSize} onChange={(value) => updateControlLocal({ roomSize: value })} onCommit={(value) => commitControls({ roomSize: value })} />
+        </div>
+        <div className="mt-4 flex flex-wrap gap-2">
+          <span className="rounded-full border border-white/10 bg-black/25 px-2.5 py-1 text-xs font-semibold text-zinc-300">Vocal Reverb 18-28</span>
+          <span className="rounded-full border border-white/10 bg-black/25 px-2.5 py-1 text-xs font-semibold text-zinc-300">Vocal Delay 6-12</span>
+          <span className="rounded-full border border-white/10 bg-black/25 px-2.5 py-1 text-xs font-semibold text-zinc-300">Room Size 30-45</span>
+          <span className="rounded-full border border-white/10 bg-black/25 px-2.5 py-1 text-xs font-semibold text-zinc-300">Lead sends in vocal cards</span>
+        </div>
+      </section>
 
       <section className="mt-6 grid gap-5">
         <div className="rounded-lg border border-white/10 bg-white/[0.04] p-4">
@@ -585,10 +705,7 @@ export default function MixerPage() {
               <h2 className="font-semibold text-white">Auto Mix Controls</h2>
               <p className="mt-1 text-sm text-zinc-400">{presetDescription(presets, controls.preset)}</p>
             </div>
-            <Button type="button" variant="secondary" onClick={runResetAdvancedMix} disabled={actionLoading === "reset"} className="sm:w-auto">
-              <RotateCcw size={17} />
-              Reset to Auto Mix
-            </Button>
+            <StatusBadge status={latestVersion ? "Advanced Mix Ready" : "Pending"} />
           </div>
           <div className="mt-4 grid gap-4 sm:grid-cols-2">
             <label className="block">
@@ -618,24 +735,6 @@ export default function MixerPage() {
             <ControlSlider label="Vocal Reverb" value={controls.vocalReverbAmount} onChange={(value) => updateControlLocal({ vocalReverbAmount: value })} onCommit={(value) => commitControls({ vocalReverbAmount: value })} />
             <ControlSlider label="Room Size" value={controls.roomSize} onChange={(value) => updateControlLocal({ roomSize: value })} onCommit={(value) => commitControls({ roomSize: value })} />
           </div>
-          <div className="mt-4 flex flex-col gap-2 sm:flex-row sm:flex-wrap">
-            <Button type="button" variant="secondary" onClick={runApplyAutoBalance} disabled={!analysisComplete || actionLoading === "apply"}>
-              <SlidersHorizontal size={17} />
-              Apply Auto Balance
-            </Button>
-            <Button type="button" variant="secondary" onClick={runRoughMix} disabled={!stems.length || actionLoading === "preview"}>
-              <Play size={17} />
-              Preview Rough Mix
-            </Button>
-            <Button type="button" onClick={runAdvancedMix} disabled={!stems.length || mixRunning}>
-              <Sparkles size={17} />
-              Generate Mix
-            </Button>
-            <Button type="button" variant="secondary" onClick={runInstrumentalMix} disabled={!stems.length || mixRunning}>
-              <MicOff size={17} />
-              Instrumental Mix
-            </Button>
-          </div>
         </div>
 
         <MixPreviewPanel
@@ -656,7 +755,6 @@ export default function MixerPage() {
           onSaveVersionLabel={saveVersionLabel}
           onDeleteVersion={removeMixVersion}
           onDeleteRoughMix={removeRoughMix}
-          onDeleteAllMixVersions={removeAllMixVersions}
         />
       </section>
 
@@ -682,7 +780,6 @@ function MixPreviewPanel({
   onSaveVersionLabel,
   onDeleteVersion,
   onDeleteRoughMix,
-  onDeleteAllMixVersions,
 }) {
   return (
     <div className="rounded-lg border border-white/10 bg-white/[0.04] p-4">
@@ -696,12 +793,6 @@ function MixPreviewPanel({
             <Button type="button" variant="danger" onClick={onDeleteRoughMix} className="sm:w-auto">
               <Trash2 size={17} />
               Delete Preview
-            </Button>
-          ) : null}
-          {mixVersions.length ? (
-            <Button type="button" variant="danger" onClick={onDeleteAllMixVersions} className="sm:w-auto">
-              <Trash2 size={17} />
-              Delete All Mixes
             </Button>
           ) : null}
           {latestVersion ? <StatusBadge status="Completed" /> : <StatusBadge status="Pending" />}
@@ -812,6 +903,32 @@ function MixPreviewPanel({
           ))}
         </div>
       ) : null}
+    </div>
+  );
+}
+
+function StepSummary({ label, value }) {
+  return (
+    <div className="rounded-lg border border-white/10 bg-black/20 px-3 py-3">
+      <p className="text-xs font-semibold uppercase tracking-[0.12em] text-zinc-500">{label}</p>
+      <p className="mt-1 truncate text-sm font-semibold text-zinc-100">{value}</p>
+    </div>
+  );
+}
+
+function ToolGroup({ icon: Icon, title, description, children }) {
+  return (
+    <div className="rounded-lg border border-white/10 bg-white/[0.04] p-4">
+      <div className="flex items-start gap-3">
+        <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg border border-white/10 bg-black/25 text-teal-200">
+          <Icon size={17} />
+        </span>
+        <div>
+          <h2 className="font-semibold text-white">{title}</h2>
+          <p className="mt-1 text-sm leading-6 text-zinc-400">{description}</p>
+        </div>
+      </div>
+      <div className="mt-4 flex flex-col gap-2 sm:flex-row sm:flex-wrap">{children}</div>
     </div>
   );
 }
@@ -1032,6 +1149,7 @@ function actionPanelFor(actionLoading, savingStemId, mixJob, onStopMix, stopping
   if (actionLoading === "deleteVersion") return { title: "Deleting Mix Version", message: "Removing generated mix files and metadata." };
   if (actionLoading === "deleteRough") return { title: "Deleting Rough Preview", message: "Removing the generated rough mix preview." };
   if (actionLoading === "deleteAllVersions") return { title: "Deleting Mix Versions", message: "Removing mix versions, rough preview, masters, and exports." };
+  if (actionLoading === "vocalSpace") return { title: "Saving Vocal Space", message: "Updating vocal reverb, delay, and lead vocal sends." };
   if (actionLoading === "controls" || actionLoading === "preset") return { title: "Saving Mix Controls", message: "Updating advanced mix controls." };
   if (savingStemId) return { title: "Saving Stem Setting", message: "Updating the selected stem setting." };
   return null;

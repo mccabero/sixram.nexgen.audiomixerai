@@ -1,4 +1,4 @@
-import { ArrowLeft, Archive, CheckCircle2, Download, FileAudio, Film, Gauge, RefreshCw, Scissors, ShieldCheck, Sparkles, Trash2, TriangleAlert } from "lucide-react";
+import { ArrowLeft, Archive, CheckCircle2, ChevronDown, Download, FileAudio, Film, Gauge, RefreshCw, Scissors, Settings2, ShieldCheck, Sparkles, Trash2, TriangleAlert } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import {
@@ -19,7 +19,6 @@ import EmptyState from "../components/EmptyState.jsx";
 import ProcessingPanel from "../components/ProcessingPanel.jsx";
 import StatusBadge from "../components/StatusBadge.jsx";
 import WaveformPreview from "../components/WaveformPreview.jsx";
-import WorkflowGuide from "../components/WorkflowGuide.jsx";
 import { formatBytes, formatDateTime, formatDb, formatDuration, formatLufs, formatPercent } from "../utils/format.js";
 
 const defaultControls = {
@@ -53,12 +52,14 @@ export default function ExportPage() {
   const [compareA, setCompareA] = useState("");
   const [compareB, setCompareB] = useState("");
   const [selectedMixDuration, setSelectedMixDuration] = useState(Number.NaN);
+  const [showMoreTools, setShowMoreTools] = useState(true);
 
   const mixVersions = project?.mixSettings?.mixVersions || [];
   const masteringSettings = project?.masteringSettings || {};
   const controls = { ...defaultControls, ...(masteringSettings.controls || {}) };
   const masterVersions = masteringSettings.masterVersions || [];
   const exportFiles = masteringSettings.exportFiles || [];
+  const exportCount = latestExport && !exportFiles.some((file) => file.id === latestExport.id) ? exportFiles.length + 1 : exportFiles.length;
   const selectedMixId = controls.selectedMixVersionId || project?.mixSettings?.latestMixVersionId || mixVersions[mixVersions.length - 1]?.id || "";
   const selectedMix = mixVersions.find((version) => version.id === selectedMixId) || null;
   const selectedMixUrl = selectedMix?.mp3Url || selectedMix?.wavUrl || "";
@@ -369,33 +370,96 @@ export default function ExportPage() {
         Back to project
       </Link>
 
-      <div className="mt-5 flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
-        <div>
-          <p className="text-sm font-semibold uppercase tracking-[0.18em] text-teal-100/70">Mastering & Export</p>
-          <h1 className="mt-2 text-3xl font-semibold text-white">{project?.songTitle || project?.name || "Final master"}</h1>
-          <p className="mt-2 max-w-2xl text-sm leading-6 text-zinc-400">Master a selected mix version, export final files, and save local reports/backups.</p>
+      <section className="mt-5 rounded-lg border border-white/10 bg-gradient-to-br from-white/[0.075] via-white/[0.04] to-teal-300/[0.04] p-5 shadow-[0_24px_80px_rgba(0,0,0,0.24)]">
+        <div className="flex flex-col gap-5 xl:flex-row xl:items-start xl:justify-between">
+          <div className="max-w-3xl">
+            <p className="text-sm font-semibold uppercase tracking-[0.18em] text-teal-100/70">Step 6</p>
+            <h1 className="mt-2 text-3xl font-semibold text-white">Master and export</h1>
+            <p className="mt-3 max-w-2xl text-sm leading-6 text-zinc-400">
+              Select the mix, choose a loudness target, then generate the final master. Export and cleanup tools stay tucked into More tools.
+            </p>
+          </div>
+          <div className="grid gap-2 sm:grid-cols-3 xl:min-w-[420px]">
+            <StepSummary label="Mixes" value={mixVersions.length} />
+            <StepSummary label="Masters" value={masterVersions.length} />
+            <StepSummary label="Exports" value={exportCount} />
+          </div>
         </div>
-        <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
+
+        <div className="mt-5 flex flex-col gap-2 sm:flex-row sm:flex-wrap">
+          <Button type="button" onClick={runMaster} disabled={!selectedMixId || actionLoading === "master" || masterRunning}>
+            <Sparkles size={17} />
+            Generate master
+          </Button>
+          <Button as={Link} to={`/projects/${projectId}/mixer`} variant="secondary">
+            <ArrowLeft size={17} />
+            Back to Step 5
+          </Button>
           <Button type="button" variant="secondary" onClick={refreshProject} disabled={actionLoading === "refresh"}>
             <RefreshCw size={17} />
             Refresh
           </Button>
-          <Button as={Link} to={videoEditorHref} variant="secondary">
-            <Film size={17} />
-            Edit Video
-          </Button>
-          <Button type="button" onClick={runMaster} disabled={!selectedMixId || actionLoading === "master" || masterRunning}>
-            <Sparkles size={17} />
-            Generate Master
-          </Button>
-          <Button type="button" variant="danger" onClick={removeMasters} disabled={!masterVersions.length || actionLoading === "deleteMasters" || masterRunning}>
-            <Trash2 size={17} />
-            Delete Masters
+          <Button type="button" variant="ghost" onClick={() => setShowMoreTools((current) => !current)} aria-expanded={showMoreTools}>
+            <Settings2 size={17} />
+            More tools
+            <ChevronDown size={16} className={`transition ${showMoreTools ? "rotate-180" : ""}`} />
           </Button>
         </div>
-      </div>
+      </section>
 
-      <WorkflowGuide project={project} currentStep="export" className="mt-6" onProjectRefresh={loadProject} />
+      {showMoreTools ? (
+        <section className="mt-4 grid gap-3 lg:grid-cols-3">
+          <ToolGroup icon={Download} title="File exports" description="Create extra files from the selected mix using the current format and crop settings.">
+            <Button type="button" variant="secondary" onClick={runExportMix} disabled={!selectedMixId || actionLoading === "exportMix"}>
+              <Download size={17} />
+              Export mix
+            </Button>
+            <Button type="button" variant="secondary" onClick={runExportInstrumental} disabled={!selectedMixId || selectedMixHasVocals || actionLoading === "instrumental"} title={selectedMixHasVocals ? "Select a mix version with vocals muted to export instrumental." : "Export instrumental"}>
+              <FileAudio size={17} />
+              Instrumental
+            </Button>
+          </ToolGroup>
+          <ToolGroup icon={Film} title="Video handoff" description={shownLatestMaster ? "A master is ready to use as the soundtrack for the video editor." : "Generate a master first, then the video editor unlocks here."}>
+            {shownLatestMaster ? (
+              <Button as={Link} to={videoEditorHref} variant="secondary">
+                <Film size={17} />
+                Open video editor
+              </Button>
+            ) : (
+              <Button type="button" variant="secondary" disabled>
+                <Film size={17} />
+                Master first
+              </Button>
+            )}
+          </ToolGroup>
+          <ToolGroup icon={Trash2} title="Cleanup" description="Remove generated master or export files while keeping mixes and original stems.">
+            <Button type="button" variant="danger" onClick={removeMasters} disabled={!masterVersions.length || actionLoading === "deleteMasters" || masterRunning}>
+              <Trash2 size={17} />
+              Delete masters
+            </Button>
+            <Button type="button" variant="danger" onClick={removeExports} disabled={!exportCount || actionLoading === "deleteExports"}>
+              <Trash2 size={17} />
+              Delete exports
+            </Button>
+          </ToolGroup>
+        </section>
+      ) : null}
+
+      {shownLatestMaster ? (
+        <section className="mt-5 rounded-lg border border-teal-300/30 bg-gradient-to-r from-teal-300/15 via-emerald-300/10 to-white/[0.04] p-4 shadow-[0_0_42px_rgba(45,212,191,0.13)]">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <p className="text-sm font-semibold uppercase tracking-[0.16em] text-teal-100/80">Video editor is ready</p>
+              <h2 className="mt-1 text-xl font-semibold text-white">Create the performance video</h2>
+              <p className="mt-1 text-sm leading-6 text-zinc-300">Use the latest master as the soundtrack when you are ready to edit video.</p>
+            </div>
+            <Button as={Link} to={videoEditorHref} className="w-full justify-center sm:w-auto">
+              <Film size={17} />
+              Open video editor
+            </Button>
+          </div>
+        </section>
+      ) : null}
 
       {error ? <p className="mt-5 rounded-lg border border-rose-300/20 bg-rose-400/10 px-3 py-2 text-sm text-rose-100">{error}</p> : null}
       {notice ? <p className="mt-5 rounded-lg border border-amber-300/20 bg-amber-300/10 px-3 py-2 text-sm text-amber-100">{notice}</p> : null}
@@ -499,20 +563,6 @@ export default function ExportPage() {
                 <Readout label="Selected Format" value={selectedFormat?.description || controls.outputFormat} />
               </div>
 
-              <div className="mt-4 flex flex-col gap-2 sm:flex-row sm:flex-wrap">
-                <Button type="button" onClick={runMaster} disabled={!selectedMixId || actionLoading === "master" || masterRunning}>
-                  <Sparkles size={17} />
-                  Generate Master
-                </Button>
-                <Button type="button" variant="secondary" onClick={runExportMix} disabled={!selectedMixId || actionLoading === "exportMix"}>
-                  <Download size={17} />
-                  Export Mix
-                </Button>
-                <Button type="button" variant="secondary" onClick={runExportInstrumental} disabled={!selectedMixId || selectedMixHasVocals || actionLoading === "instrumental"} title={selectedMixHasVocals ? "Select a mix version with vocals muted to export instrumental." : "Export instrumental"}>
-                  <FileAudio size={17} />
-                  Export Instrumental
-                </Button>
-              </div>
             </div>
 
             <LatestMasterPanel master={shownLatestMaster} selectedMix={selectedMix} recentlyUpdated={masterJustUpdated} videoEditorHref={videoEditorHref} />
@@ -524,6 +574,32 @@ export default function ExportPage() {
           </section>
         </>
       )}
+    </div>
+  );
+}
+
+function StepSummary({ label, value }) {
+  return (
+    <div className="rounded-lg border border-white/10 bg-black/20 px-3 py-3">
+      <p className="text-xs font-semibold uppercase tracking-[0.12em] text-zinc-500">{label}</p>
+      <p className="mt-1 truncate text-sm font-semibold text-zinc-100">{value}</p>
+    </div>
+  );
+}
+
+function ToolGroup({ icon: Icon, title, description, children }) {
+  return (
+    <div className="rounded-lg border border-white/10 bg-white/[0.04] p-4">
+      <div className="flex items-start gap-3">
+        <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg border border-white/10 bg-black/25 text-teal-200">
+          <Icon size={17} />
+        </span>
+        <div>
+          <h2 className="font-semibold text-white">{title}</h2>
+          <p className="mt-1 text-sm leading-6 text-zinc-400">{description}</p>
+        </div>
+      </div>
+      <div className="mt-4 flex flex-col gap-2 sm:flex-row sm:flex-wrap">{children}</div>
     </div>
   );
 }

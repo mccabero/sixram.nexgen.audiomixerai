@@ -1,4 +1,4 @@
-import { ArrowLeft, Brain, CheckCircle2, Library, Mic2, RefreshCw, Save, SlidersHorizontal, Sparkles, Stethoscope, Trash2 } from "lucide-react";
+import { ArrowLeft, Brain, CheckCircle2, ChevronDown, Library, Mic2, RefreshCw, Save, Settings2, SlidersHorizontal, Sparkles, Stethoscope, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import {
@@ -14,8 +14,10 @@ import {
   getProject,
   listCustomVocalPresets,
   listVocalEnhancerPresets,
+  revertVocalEnhancement,
   runVocalQualityDoctor,
   startVocalEnhancement,
+  startStemVocalEnhancement,
   updateVocalEnhancementSettings,
 } from "../api.js";
 import Button from "../components/Button.jsx";
@@ -23,13 +25,12 @@ import EmptyState from "../components/EmptyState.jsx";
 import ProcessingPanel from "../components/ProcessingPanel.jsx";
 import StatusBadge from "../components/StatusBadge.jsx";
 import WaveformPreview from "../components/WaveformPreview.jsx";
-import WorkflowGuide from "../components/WorkflowGuide.jsx";
 import { formatDb, formatLufs } from "../utils/format.js";
 
 const runningStatuses = new Set(["Pending", "Processing", "Cancelling"]);
 const vocalTypes = new Set(["Lead Vocal", "Backing Vocal"]);
 const defaultOptions = {
-  presets: ["AI Pop Clean", "Natural Clean", "Pop Vocal", "Worship Lead", "Live Vocal Fix", "Bright AI Polish", "Warm Ballad", "Backing Vocal Wide"],
+  presets: ["AI Pop Clean", "AI Studio Clear", "Suno-Style Lead", "Suno Clean Dry", "Natural Clean", "Pop Vocal", "Worship Lead", "Live Vocal Fix", "Bright AI Polish", "Warm Ballad", "Backing Vocal Wide"],
   pitchCorrectionModes: ["Off", "Natural", "Medium", "Strong"],
   fxStyles: ["Dry", "Natural Plate", "Small Hall", "Slap Delay", "Quarter Delay", "Worship Wide"],
   keys: ["Auto", "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"],
@@ -61,6 +62,10 @@ export default function VocalEnhancerPage() {
   const [stoppingJobId, setStoppingJobId] = useState("");
   const [busyStemId, setBusyStemId] = useState("");
   const [error, setError] = useState("");
+  const [showMoreTools, setShowMoreTools] = useState(true);
+  const [recommendationProgress, setRecommendationProgress] = useState(null);
+  const [doctorProgress, setDoctorProgress] = useState(null);
+  const localProgressTimerRef = useRef(null);
 
   const stems = project?.stems || [];
   const vocalStems = stems.filter((stem) => vocalTypes.has(stem.stemType) || vocalTypes.has(stem.detectionResult?.suggestedStemType));
@@ -71,6 +76,7 @@ export default function VocalEnhancerPage() {
   const doctorCount = vocalStems.filter((stem) => stem.vocalQualityDoctorResult?.status === "Completed").length;
   const latestMix = latestMixVersion(project);
   const running = job && runningStatuses.has(job.status);
+  const enhancementComplete = enhancedCount > 0;
 
   const latestJob = useMemo(() => {
     const jobs = project?.processingJobs?.filter((item) => item.type === "Vocal Enhancement") || [];
@@ -119,6 +125,40 @@ export default function VocalEnhancerPage() {
     return () => window.clearInterval(timer);
   }, [projectId, job?.id, job?.status]);
 
+  useEffect(() => {
+    return () => {
+      if (localProgressTimerRef.current) window.clearInterval(localProgressTimerRef.current);
+    };
+  }, []);
+
+  const startEstimatedProgress = (setProgress) => {
+    if (localProgressTimerRef.current) window.clearInterval(localProgressTimerRef.current);
+    setProgress(4);
+    localProgressTimerRef.current = window.setInterval(() => {
+      setProgress((current) => {
+        const value = typeof current === "number" ? current : 4;
+        return Math.min(92, value + Math.max(1, Math.round((94 - value) * 0.12)));
+      });
+    }, 450);
+  };
+
+  const finishEstimatedProgress = (setProgress) => {
+    if (localProgressTimerRef.current) {
+      window.clearInterval(localProgressTimerRef.current);
+      localProgressTimerRef.current = null;
+    }
+    setProgress(100);
+    window.setTimeout(() => setProgress(null), 500);
+  };
+
+  const cancelEstimatedProgress = (setProgress) => {
+    if (localProgressTimerRef.current) {
+      window.clearInterval(localProgressTimerRef.current);
+      localProgressTimerRef.current = null;
+    }
+    setProgress(null);
+  };
+
   const refreshProject = async () => {
     setActionLoading("refresh");
     try {
@@ -139,6 +179,22 @@ export default function VocalEnhancerPage() {
       setError(err.message);
     } finally {
       setActionLoading("");
+    }
+  };
+
+  const runStemEnhancement = async (stem) => {
+    setActionLoading("stem-enhance");
+    setBusyStemId(stem.id);
+    setError("");
+    try {
+      const nextJob = await startStemVocalEnhancement(projectId, stem.id);
+      setJob(nextJob);
+      await loadProject();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setActionLoading("");
+      setBusyStemId("");
     }
   };
 
@@ -168,12 +224,30 @@ export default function VocalEnhancerPage() {
     }
   };
 
+  const revertStemEnhancement = async (stem) => {
+    if (!window.confirm(`Revert ${stem.originalFilename} to the source vocal and delete downstream generated files?`)) return;
+    setActionLoading("revert-vocal");
+    setBusyStemId(stem.id);
+    setError("");
+    try {
+      setProject(await revertVocalEnhancement(projectId, stem.id));
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setActionLoading("");
+      setBusyStemId("");
+    }
+  };
+
   const analyzeVocals = async () => {
     setActionLoading("analyze-vocals");
     setError("");
+    startEstimatedProgress(setRecommendationProgress);
     try {
       setProject(await analyzeVocalRecommendations(projectId));
+      finishEstimatedProgress(setRecommendationProgress);
     } catch (err) {
+      cancelEstimatedProgress(setRecommendationProgress);
       setError(err.message);
     } finally {
       setActionLoading("");
@@ -211,9 +285,12 @@ export default function VocalEnhancerPage() {
   const runDoctor = async () => {
     setActionLoading("doctor");
     setError("");
+    startEstimatedProgress(setDoctorProgress);
     try {
       setProject(await runVocalQualityDoctor(projectId));
+      finishEstimatedProgress(setDoctorProgress);
     } catch (err) {
+      cancelEstimatedProgress(setDoctorProgress);
       setError(err.message);
     } finally {
       setActionLoading("");
@@ -301,20 +378,24 @@ export default function VocalEnhancerPage() {
     : actionLoading === "refresh"
       ? { title: "Refreshing Vocal Enhancer", message: "Reading latest vocal enhancement metadata." }
       : actionLoading === "analyze-vocals"
-        ? { title: "Analyzing Vocals", message: "Listening for tone, sibilance, noise, dynamics, and level issues." }
+        ? { title: "Analyzing Vocals", message: "Listening for tone, sibilance, noise, dynamics, and level issues.", progress: recommendationProgress ?? 4 }
         : actionLoading === "doctor"
-          ? { title: "Running Vocal Doctor", message: "Checking vocal quality, FX balance, pitch risk, mix placement, and one-click fixes." }
+          ? { title: "Running Vocal Doctor", message: "Checking vocal quality, FX balance, pitch risk, mix placement, and one-click fixes.", progress: doctorProgress ?? 4 }
           : actionLoading === "apply-all-recommendations"
             ? { title: "Applying Vocal Recommendations", message: "Writing recommended settings to all analyzed vocal stems." }
             : actionLoading === "enhance"
               ? { title: "Starting Vocal Enhancement", message: "Creating the local vocal enhancer job." }
-              : actionLoading === "delete-vocals"
-                ? { title: "Deleting Enhanced Vocals", message: "Removing enhanced vocal files and stale downstream mix/master outputs." }
-                : actionLoading === "preset-delete"
-                  ? { title: "Deleting Vocal Preset", message: "Removing the saved local preset." }
-                  : busyStemId
-                    ? { title: "Saving Vocal Settings", message: "Updating the selected vocal enhancement settings." }
-                    : null;
+              : actionLoading === "stem-enhance"
+                ? { title: "Starting Stem Enhancement", message: "Creating a local vocal enhancer job for the selected stem." }
+                : actionLoading === "delete-vocals"
+                  ? { title: "Deleting Enhanced Vocals", message: "Removing enhanced vocal files and stale downstream mix/master outputs." }
+                  : actionLoading === "revert-vocal"
+                    ? { title: "Reverting Enhanced Vocal", message: "Switching the selected vocal back to its source audio." }
+                    : actionLoading === "preset-delete"
+                      ? { title: "Deleting Vocal Preset", message: "Removing the saved local preset." }
+                      : busyStemId
+                        ? { title: "Saving Vocal Settings", message: "Updating the selected vocal enhancement settings." }
+                        : null;
 
   return (
     <div>
@@ -323,45 +404,79 @@ export default function VocalEnhancerPage() {
         Back to project
       </Link>
 
-      <div className="mt-5 flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
-        <div>
-          <p className="text-sm font-semibold uppercase tracking-[0.18em] text-teal-100/70">Vocal Enhancer</p>
-          <h1 className="mt-2 text-3xl font-semibold text-white">{project?.songTitle || project?.name || "Vocal polish"}</h1>
-          <p className="mt-2 max-w-2xl text-sm leading-6 text-zinc-400">Create non-destructive enhanced vocal stems with leveling, de-essing, pitch polish, presence, air, and subtle doubling.</p>
+      <section className="mt-5 rounded-lg border border-white/10 bg-gradient-to-br from-white/[0.075] via-white/[0.04] to-teal-300/[0.04] p-5 shadow-[0_24px_80px_rgba(0,0,0,0.24)]">
+        <div className="flex flex-col gap-5 xl:flex-row xl:items-start xl:justify-between">
+          <div className="max-w-3xl">
+            <p className="text-sm font-semibold uppercase tracking-[0.18em] text-teal-100/70">Step 4</p>
+            <h1 className="mt-2 text-3xl font-semibold text-white">Enhance vocals</h1>
+            <p className="mt-3 max-w-2xl text-sm leading-6 text-zinc-400">
+              Polish lead and backing vocals with one local enhancement pass. Enable the vocals you want, then enhance them before mixing.
+            </p>
+          </div>
+          <div className="grid gap-2 sm:grid-cols-3 xl:min-w-[420px]">
+            <StepSummary label="Vocals" value={vocalStems.length} />
+            <StepSummary label="Enabled" value={`${enabledCount}/${vocalStems.length || 0}`} />
+            <StepSummary label="Enhanced" value={`${enhancedCount}/${vocalStems.length || 0}`} />
+          </div>
         </div>
-        <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
+
+        <div className="mt-5 flex flex-col gap-2 sm:flex-row sm:flex-wrap">
+          <Button type="button" onClick={runEnhancement} disabled={!enabledCount || running || actionLoading === "enhance"}>
+            <Sparkles size={17} />
+            {enabledCount ? "Enhance vocals" : "Enable vocals first"}
+          </Button>
+          <Button as={Link} to={`/projects/${projectId}/cleaning`} variant="secondary">
+            <ArrowLeft size={17} />
+            Back to Step 3
+          </Button>
           <Button type="button" variant="secondary" onClick={refreshProject} disabled={actionLoading === "refresh"}>
             <RefreshCw size={17} />
             Refresh
           </Button>
-          <Button type="button" variant="secondary" onClick={analyzeVocals} disabled={!vocalStems.length || running || actionLoading === "analyze-vocals"}>
-            <Brain size={17} />
-            Analyze Vocals
-          </Button>
-          <Button type="button" variant="secondary" onClick={runDoctor} disabled={!vocalStems.length || running || actionLoading === "doctor"}>
-            <Stethoscope size={17} />
-            Vocal Doctor
-          </Button>
-          <Button type="button" variant="secondary" onClick={applyAllRecommendations} disabled={!recommendationCount || running || actionLoading === "apply-all-recommendations"}>
-            <CheckCircle2 size={17} />
-            Apply All
-          </Button>
-          <Button type="button" onClick={runEnhancement} disabled={!enabledCount || running || actionLoading === "enhance"}>
-            <Sparkles size={17} />
-            Enhance Vocals
-          </Button>
-          <Button type="button" variant="danger" onClick={removeVocalEnhancements} disabled={!enhancedCount || running || actionLoading === "delete-vocals"}>
-            <Trash2 size={17} />
-            Delete Enhanced
-          </Button>
-          <Button as={Link} to={`/projects/${projectId}/mixer`} variant="secondary">
-            <SlidersHorizontal size={17} />
-            Mixer
+          <Button type="button" variant="ghost" onClick={() => setShowMoreTools((current) => !current)} aria-expanded={showMoreTools}>
+            <Settings2 size={17} />
+            More tools
+            <ChevronDown size={16} className={`transition ${showMoreTools ? "rotate-180" : ""}`} />
           </Button>
         </div>
-      </div>
+      </section>
 
-      <WorkflowGuide project={project} currentStep="vocals" className="mt-6" onProjectRefresh={loadProject} />
+      {showMoreTools ? (
+        <section className="mt-4 grid gap-3 lg:grid-cols-3">
+          <ToolGroup
+            icon={Brain}
+            title="Vocal recommendations"
+            description={`${recommendationCount}/${vocalStems.length || 0} vocal recommendation${recommendationCount === 1 ? "" : "s"} ready.`}
+            badge={recommendationCount ? `${recommendationCount}/${vocalStems.length || 0} done` : ""}
+          >
+            <Button type="button" variant="secondary" onClick={analyzeVocals} disabled={!vocalStems.length || running || actionLoading === "analyze-vocals"}>
+              <Brain size={17} />
+              Analyze vocals
+            </Button>
+            <Button type="button" variant="secondary" onClick={applyAllRecommendations} disabled={!recommendationCount || running || actionLoading === "apply-all-recommendations"}>
+              <CheckCircle2 size={17} />
+              Apply all
+            </Button>
+          </ToolGroup>
+          <ToolGroup
+            icon={Stethoscope}
+            title="Vocal doctor"
+            description={`${doctorCount}/${vocalStems.length || 0} vocal quality check${doctorCount === 1 ? "" : "s"} complete.`}
+            badge={doctorCount ? `${doctorCount}/${vocalStems.length || 0} done` : ""}
+          >
+            <Button type="button" variant="secondary" onClick={runDoctor} disabled={!vocalStems.length || running || actionLoading === "doctor"}>
+              <Stethoscope size={17} />
+              Run doctor
+            </Button>
+          </ToolGroup>
+          <ToolGroup icon={Trash2} title="Enhanced output" description={`${enhancedCount}/${vocalStems.length || 0} vocal stem${enhancedCount === 1 ? "" : "s"} enhanced. ${useEnhancedCount} will feed the mixer.`}>
+            <Button type="button" variant="danger" onClick={removeVocalEnhancements} disabled={!enhancedCount || running || actionLoading === "delete-vocals"}>
+              <Trash2 size={17} />
+              Delete enhanced
+            </Button>
+          </ToolGroup>
+        </section>
+      ) : null}
 
       {error ? <p className="mt-5 rounded-lg border border-rose-300/20 bg-rose-400/10 px-3 py-2 text-sm text-rose-100">{error}</p> : null}
 
@@ -371,13 +486,19 @@ export default function VocalEnhancerPage() {
         </div>
       ) : null}
 
-      {vocalStems.length ? (
-        <section className="mt-6 grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
-          <VocalStat label="Vocal Stems" value={vocalStems.length} detail="Lead/backing candidates" />
-          <VocalStat label="Recommendations" value={`${recommendationCount}/${vocalStems.length}`} detail="Ready to apply" />
-          <VocalStat label="Doctor" value={`${doctorCount}/${vocalStems.length}`} detail="Quality checks" />
-          <VocalStat label="Enabled" value={`${enabledCount}/${vocalStems.length}`} detail="Queued for enhancement" />
-          <VocalStat label="Mix Source" value={useEnhancedCount} detail="Using enhanced vocals" />
+      {enhancementComplete ? (
+        <section className="mt-5 rounded-lg border border-teal-300/30 bg-gradient-to-r from-teal-300/15 via-emerald-300/10 to-white/[0.04] p-4 shadow-[0_0_42px_rgba(45,212,191,0.13)]">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <p className="text-sm font-semibold uppercase tracking-[0.16em] text-teal-100/80">Step 5 is ready</p>
+              <h2 className="mt-1 text-xl font-semibold text-white">Continue to mixer</h2>
+              <p className="mt-1 text-sm leading-6 text-zinc-300">Enhanced vocals are ready. Open the mixer to balance the full song.</p>
+            </div>
+            <Button as={Link} to={`/projects/${projectId}/mixer`} className="w-full justify-center sm:w-auto">
+              <SlidersHorizontal size={17} />
+              Go to Step 5
+            </Button>
+          </div>
         </section>
       ) : null}
 
@@ -392,10 +513,13 @@ export default function VocalEnhancerPage() {
                 customPresets={customPresets}
                 latestMix={latestMix}
                 busy={busyStemId === stem.id}
+                pageBusy={running || Boolean(actionLoading)}
                 onApplyCustomPreset={applyCustomPreset}
                 onApplyDoctorFix={applyDoctorFix}
                 onApplyRecommendation={applyRecommendation}
                 onDeleteCustomPreset={removeCustomPreset}
+                onEnhance={runStemEnhancement}
+                onRevert={revertStemEnhancement}
                 onSaveCustomPreset={saveCustomPreset}
                 onChange={updateStem}
               />
@@ -418,7 +542,7 @@ export default function VocalEnhancerPage() {
   );
 }
 
-function VocalStemCard({ stem, options, customPresets, latestMix, busy, onApplyCustomPreset, onApplyDoctorFix, onApplyRecommendation, onDeleteCustomPreset, onSaveCustomPreset, onChange }) {
+function VocalStemCard({ stem, options, customPresets, latestMix, busy, pageBusy, onApplyCustomPreset, onApplyDoctorFix, onApplyRecommendation, onDeleteCustomPreset, onEnhance, onRevert, onSaveCustomPreset, onChange }) {
   const settings = vocalSettings(stem);
   const result = stem.vocalEnhancementResult || {};
   const recommendation = stem.vocalAnalysisResult || {};
@@ -426,6 +550,8 @@ function VocalStemCard({ stem, options, customPresets, latestMix, busy, onApplyC
   const sourceUrl = sourcePreviewUrl(stem);
   const enhancedReady = result.status === "Completed" && result.enhancedFileUrl;
   const matchedVolumes = loudnessMatchedVolumes(result);
+  const canEnhance = settings.enabled;
+  const renderOutdated = enhancedReady && vocalRenderNeedsUpdate(settings, result);
 
   return (
     <article className="rounded-lg border border-white/10 bg-gradient-to-br from-white/[0.06] to-black/30 p-4 shadow-[0_18px_55px_rgba(0,0,0,0.2)]">
@@ -437,7 +563,34 @@ function VocalStemCard({ stem, options, customPresets, latestMix, busy, onApplyC
           </div>
           <p className="mt-1 text-sm text-zinc-500">{result.enhancedFilePath || "No enhanced vocal file yet."}</p>
         </div>
-        <StatusBadge status={stem.vocalEnhancementStatus || "Not Enhanced"} />
+        <div className="flex shrink-0 flex-col items-start gap-2 sm:flex-row sm:items-center xl:flex-col xl:items-end">
+          <StatusBadge status={stem.vocalEnhancementStatus || "Not Enhanced"} />
+          <div className="flex flex-wrap gap-2">
+            <Button
+              type="button"
+              variant={!enhancedReady || result.status === "Failed" || renderOutdated ? "primary" : "secondary"}
+              className="min-h-8 px-3 py-1 text-xs"
+              onClick={() => onEnhance(stem)}
+              disabled={busy || pageBusy || !canEnhance}
+              title={renderOutdated ? "Settings changed. Re-render this vocal to hear the update." : canEnhance ? "Enhance only this vocal stem" : "Enable this vocal first"}
+            >
+              <Sparkles size={14} />
+              {renderOutdated ? "Re-render changes" : enhancedReady ? "Re-render" : result.status === "Failed" ? "Retry" : "Enhance"}
+            </Button>
+            {enhancedReady ? (
+              <Button
+                type="button"
+                variant="secondary"
+                className="min-h-8 px-3 py-1 text-xs"
+                onClick={() => onRevert(stem)}
+                disabled={busy || pageBusy}
+                title="Revert this vocal back to source audio"
+              >
+                Revert
+              </Button>
+            ) : null}
+          </div>
+        </div>
       </div>
 
       <VocalPresetPanel
@@ -626,6 +779,14 @@ function ContextPreviewPanel({ sourceUrl, enhancedUrl, latestMix, enhancedReady,
     if (bedRef.current) bedRef.current.volume = Math.max(0, Math.min(1, bedVolume / 100));
   }, [bedVolume]);
 
+  const disabledReason = !latestMix?.url
+    ? "Available after Step 5 creates a mix version."
+    : !sourceUrl
+      ? "Source audio is not available for this vocal."
+      : !enhancedReady
+        ? "Enhance this vocal first to compare the enhanced version in the mix."
+        : "";
+
   return (
     <div className="mt-4 rounded-lg border border-fuchsia-300/15 bg-fuchsia-300/[0.055] p-4">
       <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
@@ -634,17 +795,22 @@ function ContextPreviewPanel({ sourceUrl, enhancedUrl, latestMix, enhancedReady,
           <p className="mt-1 text-sm text-zinc-400">{latestMix?.url ? `Using ${latestMix.label} quietly underneath the selected vocal.` : "Generate a mix version first to preview vocals in context."}</p>
         </div>
         <div className="flex flex-col gap-2 sm:flex-row">
-          <Button type="button" variant={mode === "source" ? "primary" : "secondary"} onClick={() => playContext("source")} disabled={!latestMix?.url || !sourceUrl}>
+          <Button type="button" variant={mode === "source" ? "primary" : "secondary"} onClick={() => playContext("source")} disabled={!latestMix?.url || !sourceUrl} title={!latestMix?.url ? "Create a mix version first." : !sourceUrl ? "Source audio is not available." : "Preview source vocal with the latest mix."}>
             Source In Mix
           </Button>
-          <Button type="button" variant={mode === "enhanced" ? "primary" : "secondary"} onClick={() => playContext("enhanced")} disabled={!latestMix?.url || !enhancedReady}>
+          <Button type="button" variant={mode === "enhanced" ? "primary" : "secondary"} onClick={() => playContext("enhanced")} disabled={!latestMix?.url || !enhancedReady} title={!latestMix?.url ? "Create a mix version first." : !enhancedReady ? "Enhance this vocal first." : "Preview enhanced vocal with the latest mix."}>
             Enhanced In Mix
           </Button>
-          <Button type="button" variant="secondary" onClick={stopAll} disabled={!mode}>
+          <Button type="button" variant="secondary" onClick={stopAll} disabled={!mode} title={!mode ? "Nothing is playing yet." : "Stop preview playback."}>
             Stop
           </Button>
         </div>
       </div>
+      {disabledReason ? (
+        <p className="mt-3 rounded-lg border border-fuchsia-200/15 bg-black/20 px-3 py-2 text-sm text-fuchsia-50">
+          {disabledReason}
+        </p>
+      ) : null}
       <div className="mt-4 grid gap-3 lg:grid-cols-[1fr_220px] lg:items-center">
         <audio ref={bedRef} src={latestMix?.url || ""} onEnded={() => setMode("")} />
         <audio ref={sourceRef} src={sourceUrl || ""} onEnded={() => setMode("")} />
@@ -837,12 +1003,36 @@ function VocalReportPanel({ result }) {
   );
 }
 
-function VocalStat({ label, value, detail }) {
+function StepSummary({ label, value }) {
+  return (
+    <div className="rounded-lg border border-white/10 bg-black/20 px-3 py-3">
+      <p className="text-xs font-semibold uppercase tracking-[0.12em] text-zinc-500">{label}</p>
+      <p className="mt-1 truncate text-sm font-semibold text-zinc-100">{value}</p>
+    </div>
+  );
+}
+
+function ToolGroup({ icon: Icon, title, description, badge = "", children }) {
   return (
     <div className="rounded-lg border border-white/10 bg-white/[0.04] p-4">
-      <p className="text-xs font-semibold uppercase tracking-[0.14em] text-zinc-500">{label}</p>
-      <p className="mt-1 text-2xl font-semibold text-white">{value}</p>
-      <p className="mt-1 text-sm text-zinc-500">{detail}</p>
+      <div className="flex items-start justify-between gap-3">
+        <div className="flex items-start gap-3">
+        <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg border border-white/10 bg-black/25 text-teal-200">
+          <Icon size={17} />
+        </span>
+        <div>
+          <h2 className="font-semibold text-white">{title}</h2>
+          <p className="mt-1 text-sm leading-6 text-zinc-400">{description}</p>
+        </div>
+        </div>
+        {badge ? (
+          <span className="inline-flex shrink-0 items-center gap-1 rounded-full border border-emerald-300/25 bg-emerald-300/10 px-2.5 py-1 text-xs font-semibold text-emerald-100">
+            <CheckCircle2 size={13} />
+            {badge}
+          </span>
+        ) : null}
+      </div>
+      <div className="mt-4 flex flex-col gap-2 sm:flex-row sm:flex-wrap">{children}</div>
     </div>
   );
 }
@@ -967,6 +1157,39 @@ function vocalSettings(stem) {
     useEnhancedInMix: true,
     ...(stem.vocalEnhancementSettings || {}),
   };
+}
+
+function vocalRenderNeedsUpdate(settings, result) {
+  if (result?.status !== "Completed") return false;
+  const fields = [
+    "preset",
+    "pitchCorrection",
+    "key",
+    "scale",
+    "fxStyle",
+    "fxAmount",
+    "bodyAmount",
+    "presenceAmount",
+    "airAmount",
+    "deEssAmount",
+    "compressionAmount",
+    "riderAmount",
+    "saturationAmount",
+    "doublerAmount",
+    "breathReductionAmount",
+    "mouthClickReductionAmount",
+    "pitchStrength",
+    "pitchHumanize",
+  ];
+
+  return fields.some((field) => {
+    const currentValue = settings[field];
+    const renderedValue = result[field];
+    if (typeof currentValue === "number" || typeof renderedValue === "number") {
+      return Math.abs(Number(currentValue || 0) - Number(renderedValue || 0)) > 0.01;
+    }
+    return `${currentValue ?? ""}` !== `${renderedValue ?? ""}`;
+  });
 }
 
 function presetSettingsFromStem(stem) {

@@ -109,6 +109,8 @@ export default function ProjectDetail() {
     );
   }
 
+  const hasMaster = Boolean(project.masteringSettings?.masterVersions?.length);
+
   return (
     <div>
       <Link to="/" className="inline-flex items-center gap-2 text-sm text-zinc-300 hover:text-white">
@@ -158,18 +160,20 @@ export default function ProjectDetail() {
 
       <ProjectLogPanel projectId={project.id} className="mt-6" />
 
-      <section className="mt-6 rounded-lg border border-white/10 bg-white/[0.04] p-4 shadow-[0_18px_55px_rgba(0,0,0,0.18)]">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            <h2 className="text-xl font-semibold text-white">Video Editor</h2>
-            <p className="mt-1 text-sm text-zinc-400">Finish a simple performance MP4 using this project&apos;s mastered audio.</p>
+      {hasMaster ? (
+        <section className="mt-6 rounded-lg border border-white/10 bg-white/[0.04] p-4 shadow-[0_18px_55px_rgba(0,0,0,0.18)]">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <h2 className="text-xl font-semibold text-white">Video Editor</h2>
+              <p className="mt-1 text-sm text-zinc-400">Finish a simple performance MP4 using this project&apos;s mastered audio.</p>
+            </div>
+            <Button as={Link} to={`/projects/${project.id}/video-editor`} variant="secondary">
+              <Film size={17} />
+              Open Video Editor
+            </Button>
           </div>
-          <Button as={Link} to={`/projects/${project.id}/video-editor`} variant="secondary">
-            <Film size={17} />
-            Open Video Editor
-          </Button>
-        </div>
-      </section>
+        </section>
+      ) : null}
 
       <section className="mt-6">
         <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">

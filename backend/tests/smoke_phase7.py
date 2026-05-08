@@ -63,7 +63,7 @@ def main() -> None:
         vocal_analysis = recommended_stem["vocalAnalysisResult"]
         assert vocal_analysis["status"] == "Completed", vocal_analysis
         assert vocal_analysis["recommendedSettings"]["enabled"] is True, vocal_analysis
-        assert vocal_analysis["recommendedSettings"]["preset"] in {"AI Pop Clean", "Natural Clean", "Pop Vocal", "Bright AI Polish", "Live Vocal Fix"}, vocal_analysis
+        assert vocal_analysis["recommendedSettings"]["preset"] in {"AI Pop Clean", "AI Studio Clear", "Suno-Style Lead", "Natural Clean", "Pop Vocal", "Bright AI Polish", "Live Vocal Fix"}, vocal_analysis
         assert "key" in vocal_analysis["recommendedSettings"], vocal_analysis
 
         applied_all = client.post(f"/api/projects/{project_id}/apply-vocal-recommendations")
@@ -77,6 +77,8 @@ def main() -> None:
         presets = client.get("/api/vocal-enhancer-presets")
         assert presets.status_code == 200, presets.text
         assert "AI Pop Clean" in presets.json()["presets"], presets.json()
+        assert "AI Studio Clear" in presets.json()["presets"], presets.json()
+        assert "Suno-Style Lead" in presets.json()["presets"], presets.json()
         assert "Bright AI Polish" in presets.json()["presets"], presets.json()
 
         custom_preset = client.post(
@@ -156,7 +158,7 @@ def main() -> None:
         assert "processed/vocals" in result["enhancedFilePath"], result
         assert resolve_stored_file_path(result["enhancedFilePath"]).exists(), result
         assert result["enhancedMetrics"]["peakDbfs"] is not None, result
-        assert result["preset"] in {"AI Pop Clean", "Pop Vocal", "Bright AI Polish", "Live Vocal Fix"}, result
+        assert result["preset"] in {"AI Pop Clean", "AI Studio Clear", "Suno-Style Lead", "Pop Vocal", "Bright AI Polish", "Live Vocal Fix"}, result
         assert result["fxStyle"] == "Dry", result
         assert result["fxAmount"] == 0, result
         assert result["presenceAmount"] >= 10, result

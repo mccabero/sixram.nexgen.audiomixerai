@@ -376,6 +376,14 @@ def update_vocal_enhancement_settings(project_id: str, stem_id: str, payload: Up
 
 
 def create_vocal_enhancement_job(project_id: str) -> ProcessingJob:
+    return _create_vocal_enhancement_job(project_id)
+
+
+def create_stem_vocal_enhancement_job(project_id: str, stem_id: str) -> ProcessingJob:
+    return _create_vocal_enhancement_job(project_id, stem_id=stem_id)
+
+
+def _create_vocal_enhancement_job(project_id: str, stem_id: str | None = None) -> ProcessingJob:
     try:
         ensure_audio_environment()
     except RuntimeError as exc:
@@ -384,7 +392,10 @@ def create_vocal_enhancement_job(project_id: str) -> ProcessingJob:
     project = _find_project(data, project_id)
     if not project.get("stems"):
         raise HTTPException(status_code=400, detail="Upload stems before enhancing vocals.")
-    if not _enabled_vocal_stems(project):
+    target_stem = _find_stem(project, stem_id) if stem_id else None
+    if not _enabled_vocal_stems(project, target_ids={stem_id} if stem_id else None):
+        if target_stem:
+            raise HTTPException(status_code=400, detail="Enable vocal enhancement for this vocal stem first.")
         raise HTTPException(status_code=400, detail="Enable vocal enhancement for at least one vocal stem.")
 
     active_job = next(
@@ -403,16 +414,19 @@ def create_vocal_enhancement_job(project_id: str) -> ProcessingJob:
         "status": "Pending",
         "progress": 0,
         "currentStemId": None,
-        "message": "Vocal enhancement queued.",
+        "message": f"Vocal enhancement queued for {target_stem['originalFilename']}." if target_stem else "Vocal enhancement queued.",
         "errors": [],
         "createdAt": now,
         "updatedAt": now,
         "completedAt": None,
     }
+    if stem_id:
+        job["targetStemIds"] = [stem_id]
     project.setdefault("processingJobs", []).append(job)
     project["updatedAt"] = now
     store.save(data)
-    append_project_log(project_subdirs(project_id)["logs"], f"Vocal enhancement job {job['id']} queued.")
+    target_label = f" for {target_stem['originalFilename']}" if target_stem else ""
+    append_project_log(project_subdirs(project_id)["logs"], f"Vocal enhancement job {job['id']} queued{target_label}.")
     return ProcessingJob(**job)
 
 
@@ -444,8 +458,13 @@ def _run_vocal_enhancement_job(project_id: str, job_id: str) -> None:
 
     data = store.load()
     project = _find_project(data, project_id)
-    stems = _enabled_vocal_stems(project)
+    job = _find_job(project, job_id)
+    target_ids = set(job.get("targetStemIds") or [])
+    stems = _enabled_vocal_stems(project, target_ids=target_ids or None)
     total = len(stems)
+    if total == 0:
+        _fail_job(project_id, job_id, "No enabled vocal stems were available for enhancement.")
+        return
     successes = 0
 
     for index, stem in enumerate(stems, start=1):
@@ -612,9 +631,11 @@ def _vocal_candidate_stems(project: dict[str, Any]) -> list[dict[str, Any]]:
     return candidates
 
 
-def _enabled_vocal_stems(project: dict[str, Any]) -> list[dict[str, Any]]:
+def _enabled_vocal_stems(project: dict[str, Any], target_ids: set[str] | None = None) -> list[dict[str, Any]]:
     enabled = []
     for stem in project.get("stems", []):
+        if target_ids is not None and stem.get("id") not in target_ids:
+            continue
         settings = _ensure_vocal_settings(stem)
         if not settings.get("enabled"):
             continue
@@ -709,9 +730,17 @@ def _build_vocal_recommendation(stem: dict[str, Any], profile: dict[str, Any], s
         "useEnhancedInMix": True,
     }
 
-    if {"Noise", "Hiss", "Low Rumble"} & issue_types:
+    repair_issues = {"Noise", "Hiss", "Low Rumble"}
+    risky_clarity_issues = repair_issues | {"Clipping", "Harsh", "Sibilant"}
+    clarity_candidate = not is_backing and not (risky_clarity_issues & issue_types)
+
+    if repair_issues & issue_types:
         recommended["preset"] = "Live Vocal Fix"
         recommended["saturationAmount"] = 24
+    elif clarity_candidate and "Dull" in issue_types and "Uneven Level" in issue_types:
+        recommended["preset"] = "Suno-Style Lead"
+    elif clarity_candidate and ("Dull" in issue_types or "Uneven Level" in issue_types):
+        recommended["preset"] = "AI Studio Clear"
     elif {"Dull", "Thin"} & issue_types and not is_backing:
         recommended["preset"] = "Bright AI Polish"
     elif "Muddy" in issue_types and not is_backing:

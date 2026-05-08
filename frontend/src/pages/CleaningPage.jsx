@@ -1,13 +1,12 @@
-import { AlertTriangle, ArrowLeft, CheckCircle2, Eraser, Gauge, Power, RefreshCw, SlidersHorizontal, Sparkles, Trash2 } from "lucide-react";
+import { ArrowLeft, ChevronDown, Eraser, Mic2, RefreshCw, Settings2, SlidersHorizontal, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { cancelProcessingJob, deleteCleanedStems, getProcessingJob, getProject, startCleaning, updateCleaningSettings } from "../api.js";
+import { cancelProcessingJob, deleteCleanedStems, getProcessingJob, getProject, revertCleanedStem, startCleaning, startStemCleaning, updateCleaningSettings } from "../api.js";
 import Button from "../components/Button.jsx";
 import EmptyState from "../components/EmptyState.jsx";
 import ProcessingPanel from "../components/ProcessingPanel.jsx";
 import StatusBadge from "../components/StatusBadge.jsx";
 import WaveformPreview from "../components/WaveformPreview.jsx";
-import WorkflowGuide from "../components/WorkflowGuide.jsx";
 import { CLEANING_MODES, HUM_FREQUENCIES } from "../constants.js";
 import { formatDb, formatLufs, formatPercent } from "../utils/format.js";
 
@@ -24,6 +23,8 @@ export default function CleaningPage() {
   const [stoppingJobId, setStoppingJobId] = useState("");
   const [busyStemId, setBusyStemId] = useState("");
   const [error, setError] = useState("");
+  const [showMoreTools, setShowMoreTools] = useState(true);
+  const [showSuggestedCleaning, setShowSuggestedCleaning] = useState(true);
 
   const stems = project?.stems || [];
   const suggestionEntries = useMemo(
@@ -54,6 +55,12 @@ export default function CleaningPage() {
   const cleanedCount = stems.filter((stem) => stem.cleaningResult?.status === "Completed" || stem.cleaningStatus === "Cleaned").length;
   const useCleanedCount = stems.filter((stem) => stem.cleaningSettings?.useCleanedInMix && stem.cleaningResult?.status === "Completed").length;
   const needsCleaningCount = actionableSuggestionEntries.length;
+  const vocalCount = stems.filter((stem) => ["Lead Vocal", "Backing Vocal"].includes(stem.stemType) || ["Lead Vocal", "Backing Vocal"].includes(stem.detectionResult?.suggestedStemType)).length;
+  const cleaningComplete = cleanedCount > 0;
+  const nextStep = vocalCount > 0
+    ? { number: 4, title: "Enhance vocals", label: "Go to Step 4", href: `/projects/${projectId}/vocals`, icon: Mic2 }
+    : { number: 5, title: "Continue to mixer", label: "Go to Step 5", href: `/projects/${projectId}/mixer`, icon: SlidersHorizontal };
+  const NextStepIcon = nextStep.icon;
   const staleJob = job && runningStatuses.has(job.status) && isStaleJob(job);
   const running = job && runningStatuses.has(job.status) && !staleJob;
 
@@ -121,6 +128,22 @@ export default function CleaningPage() {
     }
   };
 
+  const runStemCleaning = async (stem) => {
+    setActionLoading("stemClean");
+    setBusyStemId(stem.id);
+    setError("");
+    try {
+      const nextJob = await startStemCleaning(projectId, stem.id);
+      setJob(nextJob);
+      await loadProject();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setActionLoading("");
+      setBusyStemId("");
+    }
+  };
+
   const stopCleaning = async () => {
     if (!job?.id || job.status === "Cancelling") return;
     setStoppingJobId(job.id);
@@ -144,6 +167,21 @@ export default function CleaningPage() {
       setError(err.message);
     } finally {
       setActionLoading("");
+    }
+  };
+
+  const revertStemCleaning = async (stem) => {
+    if (!window.confirm(`Revert ${stem.originalFilename} to the original stem and delete downstream generated files?`)) return;
+    setActionLoading("revertCleaned");
+    setBusyStemId(stem.id);
+    setError("");
+    try {
+      setProject(await revertCleanedStem(projectId, stem.id));
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setActionLoading("");
+      setBusyStemId("");
     }
   };
 
@@ -189,11 +227,15 @@ export default function CleaningPage() {
       ? { title: "Refreshing Cleaning", message: "Reading the latest cleaning metadata." }
       : actionLoading === "clean"
         ? { title: "Starting Cleaning", message: "Creating the local cleaning job." }
+        : actionLoading === "stemClean"
+          ? { title: "Starting Stem Cleaning", message: "Creating a local cleaning job for the selected stem." }
         : actionLoading === "deleteCleaned"
           ? { title: "Deleting Cleaned Stems", message: "Removing cleaned files and stale downstream generated outputs." }
-          : busyStemId
-            ? { title: "Saving Cleaning Settings", message: "Updating the selected stem cleaning options." }
-            : null;
+          : actionLoading === "revertCleaned"
+            ? { title: "Reverting Cleaned Stem", message: "Switching the selected stem back to the original audio." }
+            : busyStemId
+              ? { title: "Saving Cleaning Settings", message: "Updating the selected stem cleaning options." }
+              : null;
 
   return (
     <div>
@@ -202,33 +244,59 @@ export default function CleaningPage() {
         Back to project
       </Link>
 
-      <div className="mt-5 flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
-        <div>
-          <p className="text-sm font-semibold uppercase tracking-[0.18em] text-teal-100/70">Cleaning</p>
-          <h1 className="mt-2 text-3xl font-semibold text-white">{project?.songTitle || project?.name || "Stem cleaning"}</h1>
-          <p className="mt-2 max-w-2xl text-sm leading-6 text-zinc-400">Prepare noisy stems before auto-balance and rough mix rendering.</p>
+      <section className="mt-5 rounded-lg border border-white/10 bg-gradient-to-br from-white/[0.075] via-white/[0.04] to-teal-300/[0.04] p-5 shadow-[0_24px_80px_rgba(0,0,0,0.24)]">
+        <div className="flex flex-col gap-5 xl:flex-row xl:items-start xl:justify-between">
+          <div className="max-w-3xl">
+            <p className="text-sm font-semibold uppercase tracking-[0.18em] text-teal-100/70">Step 3</p>
+            <h1 className="mt-2 text-3xl font-semibold text-white">Clean stems</h1>
+            <p className="mt-3 max-w-2xl text-sm leading-6 text-zinc-400">
+              Prepare noisy stems for the next stage. Apply any suggestions first, then run one local cleaning pass.
+            </p>
+          </div>
+          <div className="grid gap-2 sm:grid-cols-3 xl:min-w-[420px]">
+            <StepSummary label="Needs cleaning" value={needsCleaningCount} />
+            <StepSummary label="Enabled" value={`${enabledCount}/${stems.length || 0}`} />
+            <StepSummary label="Cleaned" value={`${cleanedCount}/${stems.length || 0}`} />
+          </div>
         </div>
-        <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
+
+        <div className="mt-5 flex flex-col gap-2 sm:flex-row sm:flex-wrap">
+          <Button type="button" onClick={runCleaning} disabled={!enabledCount || running || actionLoading === "clean"}>
+            <Eraser size={17} />
+            {enabledCount ? "Run cleaning" : "Apply suggestions first"}
+          </Button>
+          <Button as={Link} to={`/projects/${projectId}/analyze`} variant="secondary">
+            <ArrowLeft size={17} />
+            Back to Step 2
+          </Button>
           <Button type="button" variant="secondary" onClick={refreshProject} disabled={actionLoading === "refresh"}>
             <RefreshCw size={17} />
             Refresh
           </Button>
-          <Button type="button" onClick={runCleaning} disabled={!enabledCount || running || actionLoading === "clean"}>
-            <Eraser size={17} />
-            Run Cleaning
-          </Button>
-          <Button type="button" variant="danger" onClick={removeCleanedStems} disabled={!cleanedCount || running || actionLoading === "deleteCleaned"}>
-            <Trash2 size={17} />
-            Delete Cleaned
-          </Button>
-          <Button as={Link} to={`/projects/${projectId}/mixer`} variant="secondary">
-            <SlidersHorizontal size={17} />
-            Mixer
+          <Button type="button" variant="ghost" onClick={() => setShowMoreTools((current) => !current)} aria-expanded={showMoreTools}>
+            <Settings2 size={17} />
+            More tools
+            <ChevronDown size={16} className={`transition ${showMoreTools ? "rotate-180" : ""}`} />
           </Button>
         </div>
-      </div>
+      </section>
 
-      <WorkflowGuide project={project} currentStep="cleaning" className="mt-6" onProjectRefresh={loadProject} />
+      {showMoreTools ? (
+        <section className="mt-4 grid gap-3 lg:grid-cols-2">
+          <ToolGroup icon={Eraser} title="Cleaning output" description={`${cleanedCount}/${stems.length || 0} stem${stems.length === 1 ? "" : "s"} have cleaned files. ${useCleanedCount} will feed the next render.`}>
+            <Button type="button" variant="danger" onClick={removeCleanedStems} disabled={!cleanedCount || running || actionLoading === "deleteCleaned"}>
+              <Trash2 size={17} />
+              Delete cleaned
+            </Button>
+          </ToolGroup>
+          <ToolGroup icon={SlidersHorizontal} title="Skip cleanup" description="Move forward with original stems if cleaning is not needed for this project.">
+            <Button as={Link} to={nextStep.href} variant="secondary">
+              <NextStepIcon size={17} />
+              Continue without more cleaning
+            </Button>
+          </ToolGroup>
+        </section>
+      ) : null}
 
       {error ? <p className="mt-5 rounded-lg border border-rose-300/20 bg-rose-400/10 px-3 py-2 text-sm text-rose-100">{error}</p> : null}
 
@@ -250,19 +318,21 @@ export default function CleaningPage() {
         </p>
       ) : null}
 
-      {stems.length ? (
-        <section className="mt-6 grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
-          <CleaningStat icon={Power} label="Enabled" value={`${enabledCount}/${stems.length}`} detail="Will run in cleaning job" tone="teal" />
-          <CleaningStat
-            icon={AlertTriangle}
-            label="Needs Cleaning"
-            value={needsCleaningCount}
-            detail={needsCleaningCount ? "Suggested from stem analysis" : "No remaining flagged stems"}
-            tone={needsCleaningCount ? "amber" : "emerald"}
-          />
-          <CleaningStat icon={CheckCircle2} label="Cleaned" value={`${cleanedCount}/${stems.length}`} detail="Processed versions saved" tone="emerald" />
-          <CleaningStat icon={Gauge} label="Strong Mode" value={strongCount} detail="Compare before mixing" tone={strongCount ? "amber" : "zinc"} />
-          <CleaningStat icon={Sparkles} label="Mix Source" value={useCleanedCount} detail="Using cleaned files" tone="cyan" />
+      {cleaningComplete ? (
+        <section className="mt-5 rounded-lg border border-teal-300/30 bg-gradient-to-r from-teal-300/15 via-emerald-300/10 to-white/[0.04] p-4 shadow-[0_0_42px_rgba(45,212,191,0.13)]">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <p className="text-sm font-semibold uppercase tracking-[0.16em] text-teal-100/80">Step {nextStep.number} is ready</p>
+              <h2 className="mt-1 text-xl font-semibold text-white">{nextStep.title}</h2>
+              <p className="mt-1 text-sm leading-6 text-zinc-300">
+                Cleaned stems are ready. Continue with {vocalCount > 0 ? "vocal enhancement" : "mixing"} when you are happy with the results.
+              </p>
+            </div>
+            <Button as={Link} to={nextStep.href} className="w-full justify-center sm:w-auto">
+              <NextStepIcon size={17} />
+              {nextStep.label}
+            </Button>
+          </div>
         </section>
       ) : null}
 
@@ -276,22 +346,36 @@ export default function CleaningPage() {
                 These stems were flagged from the existing analysis warnings and measured noise floor. Apply the suggestion to stage them for the next cleaning pass.
               </p>
             </div>
-            <p className="text-sm text-amber-100">
-              {needsCleaningCount} stem{needsCleaningCount === 1 ? "" : "s"} still need attention.
-            </p>
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center xl:justify-end">
+              <p className="text-sm text-amber-100">
+                {needsCleaningCount} stem{needsCleaningCount === 1 ? "" : "s"} still need attention.
+              </p>
+              <button
+                type="button"
+                onClick={() => setShowSuggestedCleaning((current) => !current)}
+                aria-expanded={showSuggestedCleaning}
+                className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-amber-300/25 bg-amber-300/10 px-3 py-2 text-sm font-semibold text-amber-50 transition hover:border-amber-200/40 hover:bg-amber-300/16"
+              >
+                <Eraser size={16} />
+                {showSuggestedCleaning ? "Hide suggestions" : `Show ${needsCleaningCount} suggestion${needsCleaningCount === 1 ? "" : "s"}`}
+                <ChevronDown size={16} className={`transition ${showSuggestedCleaning ? "rotate-180" : ""}`} />
+              </button>
+            </div>
           </div>
-          <div className="divide-y divide-white/10">
-            {actionableSuggestionEntries.map(({ stem, suggestion, state }) => (
-              <SuggestedCleaningItem
-                key={stem.id}
-                stem={stem}
-                suggestion={suggestion}
-                state={state}
-                busy={busyStemId === stem.id}
-                onApply={updateStemCleaning}
-              />
-            ))}
-          </div>
+          {showSuggestedCleaning ? (
+            <div className="divide-y divide-white/10">
+              {actionableSuggestionEntries.map(({ stem, suggestion, state }) => (
+                <SuggestedCleaningItem
+                  key={stem.id}
+                  stem={stem}
+                  suggestion={suggestion}
+                  state={state}
+                  busy={busyStemId === stem.id}
+                  onApply={updateStemCleaning}
+                />
+              ))}
+            </div>
+          ) : null}
         </section>
       ) : suggestionEntries.length ? (
         <p className="mt-6 rounded-lg border border-emerald-300/20 bg-emerald-300/10 px-3 py-2 text-sm text-emerald-100">
@@ -323,6 +407,9 @@ export default function CleaningPage() {
                         stem={stem}
                         busy={busyStemId === stem.id}
                         onChange={updateStemCleaning}
+                        onClean={runStemCleaning}
+                        onRevert={revertStemCleaning}
+                        running={running || Boolean(actionLoading)}
                         suggestion={suggestionEntry?.suggestion || null}
                         suggestionState={suggestionEntry?.state || ""}
                       />
@@ -349,22 +436,28 @@ export default function CleaningPage() {
   );
 }
 
-function CleaningStat({ icon: Icon, label, value, detail, tone }) {
-  const tones = {
-    teal: "border-teal-300/20 bg-teal-300/10 text-teal-100",
-    emerald: "border-emerald-300/20 bg-emerald-300/10 text-emerald-100",
-    cyan: "border-cyan-300/20 bg-cyan-300/10 text-cyan-100",
-    amber: "border-amber-300/20 bg-amber-300/10 text-amber-100",
-    zinc: "border-zinc-500/20 bg-zinc-500/10 text-zinc-300",
-  };
+function StepSummary({ label, value }) {
   return (
-    <div className="rounded-lg border border-white/10 bg-gradient-to-br from-white/[0.055] to-black/25 p-4">
-      <span className={`grid h-10 w-10 place-items-center rounded-lg border ${tones[tone] || tones.teal}`}>
-        <Icon size={18} />
-      </span>
-      <p className="mt-4 text-xs font-semibold uppercase tracking-[0.14em] text-zinc-500">{label}</p>
-      <p className="mt-1 text-2xl font-semibold text-white">{value}</p>
-      <p className="mt-1 truncate text-sm text-zinc-500">{detail}</p>
+    <div className="rounded-lg border border-white/10 bg-black/20 px-3 py-3">
+      <p className="text-xs font-semibold uppercase tracking-[0.12em] text-zinc-500">{label}</p>
+      <p className="mt-1 truncate text-sm font-semibold text-zinc-100">{value}</p>
+    </div>
+  );
+}
+
+function ToolGroup({ icon: Icon, title, description, children }) {
+  return (
+    <div className="rounded-lg border border-white/10 bg-white/[0.04] p-4">
+      <div className="flex items-start gap-3">
+        <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg border border-white/10 bg-black/25 text-teal-200">
+          <Icon size={17} />
+        </span>
+        <div>
+          <h2 className="font-semibold text-white">{title}</h2>
+          <p className="mt-1 text-sm leading-6 text-zinc-400">{description}</p>
+        </div>
+      </div>
+      <div className="mt-4 flex flex-col gap-2 sm:flex-row sm:flex-wrap">{children}</div>
     </div>
   );
 }
@@ -407,12 +500,13 @@ function SuggestedCleaningItem({ stem, suggestion, state, busy, onApply }) {
   );
 }
 
-function CleaningRow({ stem, busy, onChange, suggestion, suggestionState }) {
+function CleaningRow({ stem, busy, onChange, onClean, onRevert, running, suggestion, suggestionState }) {
   const settings = cleaningSettings(stem);
   const result = stem.cleaningResult || {};
   const originalUrl = mediaUrl(stem.filePath);
   const cleanedUrl = result.cleanedFileUrl || mediaUrl(result.cleanedFilePath);
   const cleanedReady = result.status === "Completed" && cleanedUrl;
+  const canClean = settings.enabled && settings.mode !== "Off";
   const showSuggestion = Boolean(suggestion);
   const suggestionActionable = suggestionState === "needs-apply";
   const suggestionPendingRun = suggestionState === "ready-to-run";
@@ -515,6 +609,30 @@ function CleaningRow({ stem, busy, onChange, suggestion, suggestionState }) {
         <p className="mb-2 text-xs font-semibold uppercase tracking-[0.12em] text-zinc-500 xl:hidden">Status</p>
         <StatusBadge status={stem.cleaningStatus || "Not Cleaned"} />
         {Number.isFinite(result.peakDbfs) ? <p className="mt-2 text-xs text-zinc-500">Peak {formatDb(result.peakDbfs)}</p> : null}
+        <div className="mt-3 flex flex-col gap-2">
+          <Button
+            type="button"
+            className="min-h-8 px-3 py-1 text-xs"
+            onClick={() => onClean(stem)}
+            disabled={busy || running || !canClean}
+            title={canClean ? "Clean only this stem" : "Enable cleaning and choose a mode first"}
+          >
+            <Eraser size={14} />
+            {cleanedReady ? "Re-clean" : result.status === "Failed" ? "Retry" : "Clean"}
+          </Button>
+          {cleanedReady ? (
+            <Button
+              type="button"
+              variant="secondary"
+              className="min-h-8 px-3 py-1 text-xs"
+              onClick={() => onRevert(stem)}
+              disabled={busy || running}
+              title="Revert this stem back to the original audio"
+            >
+              Revert
+            </Button>
+          ) : null}
+        </div>
       </div>
       <div className="space-y-3">
         <p className="text-xs font-semibold uppercase tracking-[0.12em] text-zinc-500 xl:hidden">Preview</p>

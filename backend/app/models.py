@@ -158,6 +158,9 @@ class UpdateCleaningSettingsRequest(BaseModel):
 
 VOCAL_ENHANCER_PRESETS = [
     "AI Pop Clean",
+    "AI Studio Clear",
+    "Suno-Style Lead",
+    "Suno Clean Dry",
     "Natural Clean",
     "Pop Vocal",
     "Worship Lead",

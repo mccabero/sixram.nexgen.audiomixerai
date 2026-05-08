@@ -48,6 +48,25 @@ storage/projects/{projectId}/logs/
 
 Dashboard -> Upload -> Analyze/Detect -> Cleaning -> Vocal Enhancer -> Mixer -> Mastering/Export
 
+## Workflow Time Reference
+
+Typical upload-to-master timing for a 3-5 minute song:
+
+- Fast path without cleaning or vocal polish: 3-8 minutes
+- Normal full workflow: 10-25 minutes
+- Many stems, dirty vocals, or strong cleanup: 30-45+ minutes
+
+Step estimates:
+
+- Upload: seconds to 2 minutes
+- Analyze/detect: 1-3 minutes
+- Cleaning: 2-10 minutes
+- Vocal enhancement: 1-5 minutes per vocal stem
+- Mixer render: 30 seconds to 2 minutes
+- Master/export: 1-4 minutes
+
+The biggest variables are song length, number of stems, cleaning strength, number of vocal stems, pitch processing, and local CPU speed.
+
 ## Phase 7 Vocal Enhancer
 
 The Vocal Enhancer creates versioned, non-destructive enhanced vocal stems under `processed/vocals/`.
@@ -55,6 +74,8 @@ The Vocal Enhancer creates versioned, non-destructive enhanced vocal stems under
 Presets:
 
 - Natural Clean
+- AI Studio Clear
+- Suno-Style Lead
 - Pop Vocal
 - Worship Lead
 - Live Vocal Fix

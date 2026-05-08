@@ -65,12 +65,50 @@ def delete_cleaned_stems(project_id: str) -> Project:
     return Project(**project)
 
 
+def delete_cleaned_stem(project_id: str, stem_id: str) -> Project:
+    data = store.load()
+    project = _find_project(data, project_id)
+    _require_no_active_jobs(project)
+    stem = _find_stem(project, stem_id)
+    _delete_vocal_outputs(project_id, project)
+    result = stem.get("cleaningResult") or {}
+    _delete_file(project_id, result.get("cleanedFilePath"))
+    stem["cleaningResult"] = None
+    settings = stem.get("cleaningSettings") or {}
+    if settings.get("enabled") and settings.get("mode") != "Off":
+        stem["cleaningStatus"] = "Pending"
+    elif settings.get("enabled") is False or settings.get("mode") == "Off":
+        stem["cleaningStatus"] = "Disabled" if settings.get("mode") == "Off" else "Not Cleaned"
+    else:
+        stem["cleaningStatus"] = "Not Cleaned"
+    next_status = "Cleaned" if any((item.get("cleaningResult") or {}).get("status") == "Completed" for item in project.get("stems", [])) else ("Auto Balance Ready" if any(item.get("autoBalanceSuggestion") for item in project.get("stems", [])) else _status_after_analysis(project))
+    _finish_reset(project_id, data, project, next_status, f"Reverted cleaned stem {stem.get('originalFilename', stem_id)} and deleted downstream generated files.")
+    return Project(**project)
+
+
 def delete_vocal_enhancements(project_id: str) -> Project:
     data = store.load()
     project = _find_project(data, project_id)
     _require_no_active_jobs(project)
     _delete_vocal_outputs(project_id, project)
     _finish_reset(project_id, data, project, "Cleaned" if any((stem.get("cleaningResult") or {}).get("status") == "Completed" for stem in project.get("stems", [])) else _status_after_analysis(project), "Deleted vocal enhancement outputs and downstream mix/master files.")
+    return Project(**project)
+
+
+def delete_vocal_enhancement(project_id: str, stem_id: str) -> Project:
+    data = store.load()
+    project = _find_project(data, project_id)
+    _require_no_active_jobs(project)
+    stem = _find_stem(project, stem_id)
+    _delete_mixer_outputs(project_id, project)
+    result = stem.get("vocalEnhancementResult") or {}
+    _delete_file(project_id, result.get("enhancedFilePath"))
+    stem["vocalEnhancementResult"] = None
+    stem["vocalQualityDoctorResult"] = None
+    settings = stem.get("vocalEnhancementSettings") or {}
+    stem["vocalEnhancementStatus"] = "Pending" if settings.get("enabled") else "Not Enhanced"
+    next_status = "Vocals Enhanced" if any((item.get("vocalEnhancementResult") or {}).get("status") == "Completed" for item in project.get("stems", [])) else ("Cleaned" if any((item.get("cleaningResult") or {}).get("status") == "Completed" for item in project.get("stems", [])) else _status_after_analysis(project))
+    _finish_reset(project_id, data, project, next_status, f"Reverted enhanced vocal {stem.get('originalFilename', stem_id)} and deleted downstream generated files.")
     return Project(**project)
 
 
@@ -294,3 +332,10 @@ def _has_mix_versions(project: dict[str, Any]) -> bool:
 
 def _has_master_versions(project: dict[str, Any]) -> bool:
     return bool(project.get("masteringSettings", {}).get("masterVersions"))
+
+
+def _find_stem(project: dict[str, Any], stem_id: str) -> dict[str, Any]:
+    stem = next((item for item in project.get("stems", []) if item.get("id") == stem_id), None)
+    if stem is None:
+        raise HTTPException(status_code=404, detail="Stem not found.")
+    return stem

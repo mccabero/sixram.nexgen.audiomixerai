@@ -1,5 +1,6 @@
 import { X } from "lucide-react";
 import { useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import Button from "./Button.jsx";
 import ProcessingPanel from "./ProcessingPanel.jsx";
 
@@ -37,6 +38,15 @@ export default function CreateProjectModal({
     });
   }, [open, initialValues]);
 
+  useEffect(() => {
+    if (!open) return undefined;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [open]);
+
   if (!open) return null;
 
   const updateField = (field, value) => {
@@ -68,18 +78,18 @@ export default function CreateProjectModal({
     }
   };
 
-  return (
-    <div className="fixed inset-0 z-50 grid place-items-center bg-black/75 px-4 py-6 backdrop-blur-md">
-      <div className="w-full max-w-2xl rounded-lg border border-white/10 bg-gradient-to-br from-zinc-900 to-zinc-950 p-5 shadow-[0_28px_90px_rgba(0,0,0,0.45)]">
+  return createPortal(
+    <div className="create-project-modal-backdrop fixed grid place-items-center px-4 py-6 backdrop-blur-md">
+      <div className="create-project-modal-panel w-full max-w-2xl rounded-lg border p-5" role="dialog" aria-modal="true" aria-labelledby="create-project-modal-title">
         <div className="flex items-center justify-between gap-4">
           <div>
-            <h2 className="text-xl font-semibold text-white">{title}</h2>
-            <p className="mt-1 text-sm text-zinc-400">{description}</p>
+            <h2 id="create-project-modal-title" className="create-project-modal-title text-xl font-semibold">{title}</h2>
+            <p className="create-project-modal-description mt-1 text-sm">{description}</p>
           </div>
           <button
             type="button"
             onClick={onClose}
-            className="grid h-10 w-10 place-items-center rounded-lg border border-white/10 text-zinc-300 hover:bg-white/[0.06]"
+            className="create-project-modal-close grid h-10 w-10 place-items-center rounded-lg border"
             aria-label="Close create project modal"
           >
             <X size={18} />
@@ -90,7 +100,7 @@ export default function CreateProjectModal({
             <input
               value={form.name}
               onChange={(event) => updateField("name", event.target.value)}
-              className="w-full rounded-lg border border-white/10 bg-black/25 px-3 py-2.5 text-white placeholder:text-zinc-600"
+              className="create-project-modal-input w-full rounded-lg border px-3 py-2.5"
               placeholder="Live session mix"
               maxLength={120}
             />
@@ -100,7 +110,7 @@ export default function CreateProjectModal({
               <input
                 value={form.artistName}
                 onChange={(event) => updateField("artistName", event.target.value)}
-                className="w-full rounded-lg border border-white/10 bg-black/25 px-3 py-2.5 text-white placeholder:text-zinc-600"
+                className="create-project-modal-input w-full rounded-lg border px-3 py-2.5"
                 placeholder="Sixram Band"
                 maxLength={120}
               />
@@ -109,7 +119,7 @@ export default function CreateProjectModal({
               <input
                 value={form.songTitle}
                 onChange={(event) => updateField("songTitle", event.target.value)}
-                className="w-full rounded-lg border border-white/10 bg-black/25 px-3 py-2.5 text-white placeholder:text-zinc-600"
+                className="create-project-modal-input w-full rounded-lg border px-3 py-2.5"
                 placeholder="Working title"
                 maxLength={120}
               />
@@ -119,12 +129,12 @@ export default function CreateProjectModal({
             <textarea
               value={form.notes}
               onChange={(event) => updateField("notes", event.target.value)}
-              className="min-h-28 w-full resize-y rounded-lg border border-white/10 bg-black/25 px-3 py-2.5 text-white placeholder:text-zinc-600"
+              className="create-project-modal-input min-h-28 w-full resize-y rounded-lg border px-3 py-2.5"
               placeholder="References, arrangement notes, tempo, or reminders"
               maxLength={2000}
             />
           </Field>
-          {error ? <p className="rounded-lg border border-rose-300/20 bg-rose-400/10 px-3 py-2 text-sm text-rose-100">{error}</p> : null}
+          {error ? <p className="create-project-modal-error rounded-lg border px-3 py-2 text-sm">{error}</p> : null}
           {submitting ? <ProcessingPanel title={processingTitle} message={processingMessage} /> : null}
           <div className="flex flex-col-reverse gap-3 pt-2 sm:flex-row sm:justify-end">
             <Button type="button" variant="secondary" onClick={onClose}>
@@ -136,16 +146,17 @@ export default function CreateProjectModal({
           </div>
         </form>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 
 function Field({ label, required, children }) {
   return (
     <label className="block">
-      <span className="mb-1.5 block text-sm font-medium text-zinc-300">
+      <span className="create-project-modal-label mb-1.5 block text-sm font-medium">
         {label}
-        {required ? <span className="text-teal-200"> *</span> : null}
+        {required ? <span className="create-project-modal-required"> *</span> : null}
       </span>
       {children}
     </label>

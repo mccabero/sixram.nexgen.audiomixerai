@@ -37,13 +37,14 @@ from .models import (
     VideoWaveformStateResponse,
     validate_stem_type,
 )
-from .cleaning import create_cleaning_job, run_cleaning_job, update_stem_cleaning_settings
+from .cleaning import create_cleaning_job, create_stem_cleaning_job, run_cleaning_job, update_stem_cleaning_settings
 from .vocal_enhancer import (
     analyze_project_vocals,
     apply_all_vocal_recommendations,
     apply_vocal_doctor_fix,
     apply_vocal_recommendation,
     create_vocal_enhancement_job,
+    create_stem_vocal_enhancement_job,
     create_custom_vocal_preset,
     delete_custom_vocal_preset,
     get_vocal_enhancer_presets,
@@ -114,12 +115,14 @@ from .video_editor import (
 from .workflow_reset import (
     delete_analysis_results,
     delete_auto_balance,
+    delete_cleaned_stem,
     delete_cleaned_stems,
     delete_exports,
     delete_masters,
     delete_mix_versions,
     delete_rough_mix,
     delete_stem_detections,
+    delete_vocal_enhancement,
     delete_vocal_enhancements,
 )
 
@@ -388,6 +391,18 @@ def api_start_cleaning(project_id: str, background_tasks: BackgroundTasks) -> Pr
     return job
 
 
+@app.post("/api/projects/{project_id}/stems/{stem_id}/cleaning-job", response_model=ProcessingJob)
+def api_start_stem_cleaning(project_id: str, stem_id: str, background_tasks: BackgroundTasks) -> ProcessingJob:
+    job = create_stem_cleaning_job(project_id, stem_id)
+    background_tasks.add_task(run_cleaning_job, project_id, job.id)
+    return job
+
+
+@app.delete("/api/projects/{project_id}/stems/{stem_id}/cleaned-stem", response_model=Project)
+def api_delete_cleaned_stem(project_id: str, stem_id: str) -> Project:
+    return delete_cleaned_stem(project_id, stem_id)
+
+
 @app.delete("/api/projects/{project_id}/cleaned-stems", response_model=Project)
 def api_delete_cleaned_stems(project_id: str) -> Project:
     return delete_cleaned_stems(project_id)
@@ -448,6 +463,18 @@ def api_start_vocal_enhancement(project_id: str, background_tasks: BackgroundTas
     job = create_vocal_enhancement_job(project_id)
     background_tasks.add_task(run_vocal_enhancement_job, project_id, job.id)
     return job
+
+
+@app.post("/api/projects/{project_id}/stems/{stem_id}/vocal-enhancement-job", response_model=ProcessingJob)
+def api_start_stem_vocal_enhancement(project_id: str, stem_id: str, background_tasks: BackgroundTasks) -> ProcessingJob:
+    job = create_stem_vocal_enhancement_job(project_id, stem_id)
+    background_tasks.add_task(run_vocal_enhancement_job, project_id, job.id)
+    return job
+
+
+@app.delete("/api/projects/{project_id}/stems/{stem_id}/vocal-enhancement", response_model=Project)
+def api_delete_vocal_enhancement(project_id: str, stem_id: str) -> Project:
+    return delete_vocal_enhancement(project_id, stem_id)
 
 
 @app.delete("/api/projects/{project_id}/vocal-enhancements", response_model=Project)
