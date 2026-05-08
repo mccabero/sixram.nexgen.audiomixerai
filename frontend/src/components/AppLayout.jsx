@@ -1,4 +1,4 @@
-import { CircleHelp, FolderKanban, MoonStar, SunMedium, Waves, X } from "lucide-react";
+import { CircleHelp, Mic2, MoonStar, SlidersHorizontal, Sparkles, SunMedium, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Link, Outlet } from "react-router-dom";
 import sixramLogo from "../assets/sixram-band-studio-logo.png";
@@ -9,6 +9,7 @@ import GlobalJobStatus from "./GlobalJobStatus.jsx";
 export default function AppLayout() {
   const [theme, setTheme] = useState(() => readStoredTheme());
   const [timeGuideOpen, setTimeGuideOpen] = useState(false);
+  const [vocalGuideOpen, setVocalGuideOpen] = useState(false);
 
   useEffect(() => {
     applyDocumentTheme(theme);
@@ -16,13 +17,14 @@ export default function AppLayout() {
   }, [theme]);
 
   useEffect(() => {
-    if (!timeGuideOpen) return undefined;
+    if (!timeGuideOpen && !vocalGuideOpen) return undefined;
     const onKeyDown = (event) => {
       if (event.key === "Escape") setTimeGuideOpen(false);
+      if (event.key === "Escape") setVocalGuideOpen(false);
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [timeGuideOpen]);
+  }, [timeGuideOpen, vocalGuideOpen]);
 
   const nextTheme = theme === "dark" ? "light" : "dark";
 
@@ -60,6 +62,18 @@ export default function AppLayout() {
             <Button
               type="button"
               variant="secondary"
+              className="min-h-11 px-3"
+              onClick={() => setVocalGuideOpen(true)}
+              aria-label="Open vocal effects and mixing guide"
+              title="Vocal effects and mixing guide"
+            >
+              <Mic2 size={17} />
+              <span className="hidden md:inline">Vocal guide</span>
+              <span className="md:hidden">Vocal</span>
+            </Button>
+            <Button
+              type="button"
+              variant="secondary"
               className="theme-toggle min-h-11 px-3 sm:w-auto"
               onClick={() => setTheme(nextTheme)}
               aria-label={`Switch to ${nextTheme} mode`}
@@ -69,22 +83,113 @@ export default function AppLayout() {
               <span className="hidden sm:inline">{theme === "dark" ? "Light mode" : "Dark mode"}</span>
               <span className="sm:hidden">{theme === "dark" ? "Light" : "Dark"}</span>
             </Button>
-            <span className="hidden items-center gap-2 rounded-lg border border-white/10 bg-white/[0.055] px-3 py-2 text-sm text-zinc-300 sm:inline-flex">
-              <Waves size={16} className="text-teal-200" />
-              Workstation
-            </span>
-            <span className="hidden items-center gap-2 rounded-lg border border-emerald-300/20 bg-emerald-300/10 px-3 py-2 text-sm text-emerald-100 sm:inline-flex">
-              <FolderKanban size={16} />
-              Local-only
-            </span>
           </div>
         </div>
       </header>
       {timeGuideOpen ? <WorkflowTimeGuide onClose={() => setTimeGuideOpen(false)} /> : null}
+      {vocalGuideOpen ? <VocalSunoGuide onClose={() => setVocalGuideOpen(false)} /> : null}
       <GlobalJobStatus />
       <main className="mx-auto max-w-[1760px] px-4 py-7 sm:px-6 lg:px-8">
         <Outlet />
       </main>
+    </div>
+  );
+}
+
+const vocalEnhancementGuide = [
+  ["Preset", "Suno Clean Dry", "Clean, forward vocal tone without printed reverb or delay."],
+  ["FX Style", "Dry", "Keep space out of the stem so the mixer can control it later."],
+  ["Pitch", "Natural or Medium", "Use the song key/scale when known; keep humanize above 25%."],
+  ["Tone", "Presence + Air", "Add clarity first, then body only if the vocal gets thin."],
+];
+
+const vocalMixGuide = [
+  ["Level", "+1.5 to +3 dB vocal boost", "Bring the lead forward without making it feel detached."],
+  ["Space", "Mixer reverb/delay later", "Start subtle, then widen only after the dry vocal is stable."],
+  ["Width", "Lead centered, backing wider", "Avoid wide lead vocals unless the song intentionally needs that sound."],
+  ["Check", "A/B source vs enhanced", "Re-render any stem where settings changed before final mix/master."],
+];
+
+function VocalSunoGuide({ onClose }) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/70 px-4 py-6 backdrop-blur-md sm:items-center" role="presentation" onMouseDown={onClose}>
+      <section
+        className="w-full max-w-4xl rounded-lg border border-white/10 bg-zinc-950 p-5 shadow-[0_28px_90px_rgba(0,0,0,0.48)]"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="vocal-suno-guide-title"
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <p className="text-sm font-semibold uppercase tracking-[0.16em] text-teal-100/75">Vocal Reference</p>
+            <h2 id="vocal-suno-guide-title" className="mt-1 text-2xl font-semibold text-white">Suno-Style Vocal Stem Guide</h2>
+            <p className="mt-2 max-w-2xl text-sm leading-6 text-zinc-400">
+              Aim for a clean, dry, centered vocal first. Add reverb, delay, and width later in the mixer so the final vocal stays clear and controllable.
+            </p>
+          </div>
+          <button
+            type="button"
+            className="grid h-10 w-10 shrink-0 place-items-center rounded-lg border border-white/10 bg-white/[0.06] text-zinc-300 transition hover:bg-white/[0.1] hover:text-white"
+            onClick={onClose}
+            aria-label="Close vocal guide"
+          >
+            <X size={18} />
+          </button>
+        </div>
+
+        <div className="mt-5 grid gap-3 md:grid-cols-3">
+          <GuideCallout icon={Mic2} label="Step 4" title="Enhance dry" detail="Use Suno Clean Dry with FX Style set to Dry." />
+          <GuideCallout icon={SlidersHorizontal} label="Step 5" title="Mix the space" detail="Add reverb, delay, and width after the stem is rendered." />
+          <GuideCallout icon={Sparkles} label="Step 6" title="Master last" detail="Master only after the vocal sits naturally in the mix." />
+        </div>
+
+        <div className="mt-5 grid gap-4 lg:grid-cols-2">
+          <GuideTable title="Vocal Enhancer Settings" rows={vocalEnhancementGuide} />
+          <GuideTable title="Mixer Moves" rows={vocalMixGuide} />
+        </div>
+
+        <div className="mt-5 rounded-lg border border-amber-300/20 bg-amber-300/10 p-4">
+          <p className="text-sm font-semibold text-amber-100">Avoid printing too much effect into the vocal stem.</p>
+          <p className="mt-1 text-sm leading-6 text-zinc-300">
+            Non-dry FX can sound good, but they are harder to undo. For the safest Suno-like workflow: Dry enhancement first, mixer FX later.
+          </p>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function GuideCallout({ icon: Icon, label, title, detail }) {
+  return (
+    <div className="rounded-lg border border-white/10 bg-white/[0.04] p-4">
+      <div className="flex items-start gap-3">
+        <span className="grid h-10 w-10 shrink-0 place-items-center rounded-lg border border-teal-300/20 bg-teal-300/10 text-teal-100">
+          <Icon size={18} />
+        </span>
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-[0.14em] text-teal-100/75">{label}</p>
+          <h3 className="mt-1 font-semibold text-white">{title}</h3>
+          <p className="mt-1 text-sm leading-5 text-zinc-400">{detail}</p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function GuideTable({ title, rows }) {
+  return (
+    <div className="overflow-hidden rounded-lg border border-white/10">
+      <div className="border-b border-white/10 bg-white/[0.055] px-3 py-3">
+        <h3 className="font-semibold text-white">{title}</h3>
+      </div>
+      {rows.map(([setting, value, detail]) => (
+        <div key={setting} className="grid gap-1 border-b border-white/10 bg-white/[0.025] px-3 py-3 last:border-b-0 sm:grid-cols-[120px_minmax(150px,0.8fr)_1fr] sm:items-center">
+          <p className="text-sm font-semibold text-zinc-100">{setting}</p>
+          <p className="text-sm font-semibold text-teal-100">{value}</p>
+          <p className="text-sm leading-6 text-zinc-400">{detail}</p>
+        </div>
+      ))}
     </div>
   );
 }
