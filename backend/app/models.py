@@ -582,6 +582,11 @@ class VideoRawFile(BaseModel):
     height: int | None = None
     fps: float | None = None
     hasAudioTrack: bool = False
+    rotationDegrees: int = 0
+    audioOffsetMs: int | None = None
+    syncConfidence: float | None = None
+    syncAudioAssetId: str | None = None
+    syncAnalyzedAt: str | None = None
 
 
 class VideoAssemblySettings(BaseModel):

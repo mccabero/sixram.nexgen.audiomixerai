@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from copy import deepcopy
 from functools import lru_cache
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 import imageio_ffmpeg
 import numpy as np
@@ -37,7 +37,8 @@ VIDEO_PREVIEW_JOB_TYPE = "Video Preview"
 ACTIVE_VIDEO_PROCESSES: dict[str, subprocess.Popen] = {}
 ACTIVE_VIDEO_PROCESSES_LOCK = threading.Lock()
 AUDIO_ALIGN_SAMPLE_RATE = 8000
-AUDIO_ALIGN_MAX_SECONDS = 90
+AUDIO_ALIGN_MAX_SECONDS = 360
+AUDIO_ALIGN_MAX_LAG_SECONDS = 120
 EXPORT_PRESETS: dict[str, dict[str, Any]] = {
     "YouTube 1080p": {"width": 1920, "height": 1080, "crf": 20, "videoBitrate": None, "audioBitrate": "192k", "labelPrefix": "final_video"},
     "YouTube 1440p (2K)": {"width": 2560, "height": 1440, "crf": 20, "videoBitrate": None, "audioBitrate": "192k", "labelPrefix": "final_video"},
@@ -53,6 +54,11 @@ TRANSITION_STYLES = {"Cut", "Crossfade", "Dip to Black"}
 MAX_BRANDING_TEMPLATES = 12
 MAX_VIDEO_CLIPS = 12
 WAVEFORM_PEAK_BUCKETS = 180
+
+
+class VideoJobQueueResult(NamedTuple):
+    job: ProcessingJob
+    should_start: bool
 
 
 async def save_uploaded_raw_video(project_id: str, upload: UploadFile, role: str = "auto") -> VideoEditorStateResponse:
@@ -207,6 +213,8 @@ def get_video_editor_state(project_id: str) -> VideoEditorStateResponse:
     project = _find_project(data, project_id)
     settings = _ensure_video_editor_settings(project)
     changed = _apply_default_audio_asset(project, settings)
+    changed = _refresh_raw_video_metadata(settings) or changed
+    changed = _clear_missing_preview_render(settings) or changed
     if changed:
         settings["updatedAt"] = utc_now_iso()
         project["updatedAt"] = settings["updatedAt"]
@@ -306,6 +314,8 @@ def update_video_editor_settings(project_id: str, payload: UpdateVideoEditorSett
 
     if settings.get("useSelectedMasterAudio") and not settings.get("selectedAudioAssetId"):
         _apply_default_audio_asset(project, settings)
+    _refresh_raw_video_metadata(settings)
+    _clear_missing_preview_render(settings)
 
     now = utc_now_iso()
     settings["updatedAt"] = now
@@ -386,6 +396,7 @@ def run_video_auto_sync(project_id: str) -> VideoEditorStateResponse:
     data = store.load()
     project = _find_project(data, project_id)
     settings = _ensure_video_editor_settings(project)
+    _refresh_raw_video_metadata(settings)
     raw_video = _first_syncable_clip(settings)
     if not raw_video:
         raise HTTPException(status_code=400, detail="Upload a primary video with original audio before running auto-sync.")
@@ -394,11 +405,17 @@ def run_video_auto_sync(project_id: str) -> VideoEditorStateResponse:
     asset = _find_audio_asset(project, settings.get("selectedAudioAssetId"))
 
     try:
-        video_audio = _decode_alignment_audio(resolve_stored_file_path(raw_video["filePath"]), stream_selector="0:a:0")
-        master_audio = _decode_alignment_audio(resolve_stored_file_path(asset["filePath"]), stream_selector="0:a:0")
-        offset_ms, confidence = _estimate_audio_offset_ms(video_audio, master_audio)
-        message = f"Estimated master offset at {offset_ms:+d} ms with {confidence:.0%} confidence."
-        settings["audioOffsetMs"] = offset_ms
+        sync_results = _sync_video_clips_to_audio(project, settings, asset, force=True)
+        primary_result = sync_results.get(str(raw_video.get("id")) or "")
+        if not primary_result:
+            raise ValueError("Auto-sync could not estimate the primary video offset.")
+        offset_ms = int(primary_result["offsetMs"])
+        confidence = float(primary_result["confidence"])
+        clip_count = len(sync_results)
+        focus_count = max(0, clip_count - 1)
+        message = f"Estimated primary master offset at {offset_ms:+d} ms with {confidence:.0%} confidence."
+        if focus_count:
+            message += f" Synced {focus_count} focused clip{'' if focus_count == 1 else 's'} to the same master."
         settings["autoSyncResult"] = {
             "status": "Completed",
             "offsetMs": offset_ms,
@@ -475,19 +492,34 @@ def get_video_waveforms(project_id: str) -> VideoWaveformStateResponse:
 
 
 def create_video_render_job(project_id: str) -> ProcessingJob:
-    return _create_video_job(project_id, VIDEO_JOB_TYPE, "Video export queued.")
+    return queue_video_render_job(project_id).job
 
 
 def create_video_preview_job(project_id: str) -> ProcessingJob:
+    return queue_video_preview_job(project_id).job
+
+
+def queue_video_render_job(project_id: str) -> VideoJobQueueResult:
+    return _create_video_job(project_id, VIDEO_JOB_TYPE, "Video export queued.")
+
+
+def queue_video_preview_job(project_id: str) -> VideoJobQueueResult:
     return _create_video_job(project_id, VIDEO_PREVIEW_JOB_TYPE, "Edited preview queued.")
 
 
-def _create_video_job(project_id: str, job_type: str, message: str) -> ProcessingJob:
+def _create_video_job(project_id: str, job_type: str, message: str) -> VideoJobQueueResult:
     ensure_audio_environment()
     data = store.load()
     project = _find_project(data, project_id)
     settings = _ensure_video_editor_settings(project)
     _apply_default_audio_asset(project, settings)
+    _refresh_raw_video_metadata(settings)
+    if settings.get("useSelectedMasterAudio") and settings.get("selectedAudioAssetId"):
+        try:
+            asset = _find_audio_asset(project, settings.get("selectedAudioAssetId"))
+            _sync_video_clips_to_audio(project, settings, asset, force=False)
+        except Exception as exc:
+            append_project_log(project_subdirs(project_id)["logs"], f"Video sync warning: {str(exc) or 'Could not refresh clip sync offsets before rendering.'}")
     _validate_render_settings(project, settings)
 
     active_job = _find_active_video_job(project)
@@ -495,7 +527,7 @@ def _create_video_job(project_id: str, job_type: str, message: str) -> Processin
         if active_job.get("type") == job_type:
             append_project_log(project_subdirs(project_id)["logs"], f"Reused active {job_type.lower()} job {active_job['id']}.")
             store.save(data)
-            return ProcessingJob(**active_job)
+            return VideoJobQueueResult(ProcessingJob(**active_job), False)
         raise HTTPException(status_code=409, detail=f"{active_job.get('type', 'Video render')} is already running. Wait for it to finish first.")
 
     now = utc_now_iso()
@@ -517,7 +549,7 @@ def _create_video_job(project_id: str, job_type: str, message: str) -> Processin
     project["updatedAt"] = now
     store.save(data)
     append_project_log(project_subdirs(project_id)["logs"], f"{job_type} job {job['id']} queued.")
-    return ProcessingJob(**job)
+    return VideoJobQueueResult(ProcessingJob(**job), True)
 
 
 def get_video_render_job(project_id: str, job_id: str) -> ProcessingJob:
@@ -608,6 +640,7 @@ def _run_video_job(project_id: str, job_id: str, preview_mode: bool) -> None:
     data = store.load()
     project = _find_project(data, project_id)
     settings = dict(_ensure_video_editor_settings(project))
+    _refresh_raw_video_metadata(settings)
     _validate_render_settings(project, settings)
 
     raw_videos = _raw_video_clips(settings)
@@ -618,9 +651,10 @@ def _run_video_job(project_id: str, job_id: str, preview_mode: bool) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     export_preset = "Lightweight Preview" if preview_mode else settings.get("exportPreset") if settings.get("exportPreset") in EXPORT_PRESETS else "YouTube 1080p"
     if preview_mode:
-        output_path = output_dir / "edited_preview.mp4"
+        safe_job_id = re.sub(r"[^A-Za-z0-9_-]+", "", job_id)[:16] or uuid.uuid4().hex[:16]
+        output_path = output_dir / f"edited_preview_{safe_job_id}.mp4"
         if output_path.exists():
-            output_path.unlink()
+            _delete_file_quietly(output_path)
         version_number = 1
     else:
         output_prefix = EXPORT_PRESETS[export_preset]["labelPrefix"]
@@ -694,6 +728,7 @@ def _run_video_job(project_id: str, job_id: str, preview_mode: bool) -> None:
     job = _find_job(project, job_id)
     if job.get("status") in {"Cancelling", "Cancelled"}:
         raise JobCancelled(job.get("message") or "Job was stopped by the user.")
+    previous_preview = settings.get("previewRender") if preview_mode and isinstance(settings.get("previewRender"), dict) else None
     if preview_mode:
         settings["previewRender"] = render_record
     else:
@@ -708,6 +743,8 @@ def _run_video_job(project_id: str, job_id: str, preview_mode: bool) -> None:
     job["updatedAt"] = now
     job["completedAt"] = now
     store.save(data)
+    if preview_mode:
+        _delete_render_file(previous_preview, keep_path=render_record["filePath"])
     append_project_log(project_subdirs(project_id)["logs"], f"{'Video preview' if preview_mode else 'Video export'} saved to {render_record['filePath']}.")
 
 
@@ -742,9 +779,9 @@ def _render_video(
     total_expected_duration = expected_duration + intro_duration + outro_duration
     fade_in_duration, fade_out_duration = _output_fade_durations(settings, total_expected_duration)
 
-    command = [ffmpeg, "-y", "-hide_banner", "-loglevel", "error", "-progress", "pipe:1", "-nostats"]
+    command = [ffmpeg, "-y", "-hide_banner", "-noautorotate", "-loglevel", "error", "-progress", "pipe:1", "-nostats"]
     for video_path in video_paths:
-        command += ["-i", str(video_path)]
+        command += ["-display_rotation", "0", "-i", str(video_path)]
     selected_audio_index: int | None = None
     if use_selected_audio:
         selected_audio_index = len(video_paths)
@@ -776,13 +813,17 @@ def _render_video(
     else:
         command += ["-an"]
 
-    command += ["-c:v", "libx264", "-preset", "veryfast", "-crf", str(export_preset["crf"]), "-pix_fmt", "yuv420p"]
+    command += ["-c:v", "libx264", "-preset", "veryfast", "-crf", str(export_preset["crf"]), "-pix_fmt", "yuv420p", "-metadata:s:v:0", "rotate=0"]
     if use_selected_audio or use_original_audio:
         command += ["-c:a", "aac", "-b:a", export_preset["audioBitrate"], "-shortest"]
     command += ["-movflags", "+faststart", str(output_path)]
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    _run_ffmpeg_with_progress(command, total_expected_duration, progress_callback, job_id=job_id, should_cancel=should_cancel)
+    try:
+        _run_ffmpeg_with_progress(command, total_expected_duration, progress_callback, job_id=job_id, should_cancel=should_cancel)
+    except Exception:
+        _delete_file_quietly(output_path)
+        raise
     if not output_path.exists() or output_path.stat().st_size == 0:
         raise RuntimeError("FFmpeg did not create a final MP4.")
 
@@ -797,8 +838,8 @@ def _build_main_video_filters(
     logo_index: int | None,
     watermark: dict[str, Any],
 ) -> str:
-    for index, _clip in enumerate(video_clips):
-        base_filter = _base_video_filter(target_width, target_height, fps)
+    for index, clip in enumerate(video_clips):
+        base_filter = _base_video_filter(target_width, target_height, fps, clip)
         filter_parts.append(f"[{index}:v:0]{base_filter}[vclip{index}]")
 
     current_label = _assemble_video_sequence(filter_parts, video_clips, settings)
@@ -877,7 +918,9 @@ def _build_audio_filters(
 
     selected_audio_label: str | None = None
     if use_selected_audio and selected_audio_index is not None:
-        audio_filter = _selected_audio_filter(int(settings.get("audioOffsetMs", 0) or 0), pad=True)
+        trim_start = max(0.0, float(settings.get("trimStartSeconds", 0) or 0))
+        relative_offset_ms = int(settings.get("audioOffsetMs", 0) or 0) - int(round(trim_start * 1000))
+        audio_filter = _selected_audio_filter(relative_offset_ms, pad=True)
         filter_parts.append(
             f"[{selected_audio_index}:a:0]{audio_filter},aformat=sample_rates=44100:channel_layouts=stereo,atrim=duration={expected_duration:.3f},asetpts=PTS-STARTPTS[amastertrim]"
         )
@@ -931,7 +974,9 @@ def _assemble_video_sequence(filter_parts: list[str], video_clips: list[dict[str
         insert_start = float(insert["start"])
         insert_duration = float(insert["duration"])
         fade_window = min(transition_duration, max(0.0, insert_duration / 2 - 0.05))
-        source_start = float(insert.get("sourceStart", 0.0) or 0.0)
+        source_start = _synced_focus_source_start(primary_clip, video_clips[input_index], insert)
+        if source_start is None:
+            continue
         secondary_parts = [f"[vclip{input_index}]trim=start={source_start:.3f}:duration={insert_duration:.3f}"]
         if transition_style == "Crossfade" and fade_window > 0:
             secondary_parts.extend(
@@ -1028,12 +1073,29 @@ def _output_fade_durations(settings: dict[str, Any], total_duration: float) -> t
     return round(fade_in, 3), round(fade_out, 3)
 
 
-def _base_video_filter(target_width: int, target_height: int, fps: float) -> str:
-    return (
-        f"scale={target_width}:{target_height}:force_original_aspect_ratio=decrease,"
-        f"pad={target_width}:{target_height}:(ow-iw)/2:(oh-ih)/2,"
-        f"fps={fps:.3f},setsar=1"
+def _base_video_filter(target_width: int, target_height: int, fps: float, clip: dict[str, Any] | None = None) -> str:
+    filters = _rotation_filters(int((clip or {}).get("rotationDegrees", 0) or 0))
+    filters.extend(
+        [
+            f"scale={target_width}:{target_height}:force_original_aspect_ratio=decrease",
+            f"pad={target_width}:{target_height}:(ow-iw)/2:(oh-ih)/2",
+            f"fps={fps:.3f}",
+            "setsar=1",
+            "setpts=PTS-STARTPTS",
+        ]
     )
+    return ",".join(filters)
+
+
+def _rotation_filters(rotation_degrees: int) -> list[str]:
+    normalized = rotation_degrees % 360
+    if normalized == 180:
+        return ["hflip", "vflip"]
+    if normalized == 90:
+        return ["transpose=clock"]
+    if normalized == 270:
+        return ["transpose=cclock"]
+    return []
 
 
 def _overlay_text_filters(overlay: dict[str, Any], target_width: int, target_height: int) -> str:
@@ -1091,9 +1153,16 @@ def _title_card_filter(label: str, card: dict[str, Any], duration: float, target
 def _target_dimensions(raw_video: dict[str, Any], preset: dict[str, Any]) -> tuple[int, int]:
     if preset.get("width") and preset.get("height"):
         return int(preset["width"]), int(preset["height"])
+    width, height = _display_dimensions(raw_video)
+    return max(2, width - width % 2), max(2, height - height % 2)
+
+
+def _display_dimensions(raw_video: dict[str, Any]) -> tuple[int, int]:
     width = int(raw_video.get("width") or 1920)
     height = int(raw_video.get("height") or 1080)
-    return max(2, width - width % 2), max(2, height - height % 2)
+    if int(raw_video.get("rotationDegrees", 0) or 0) % 180 == 90:
+        return height, width
+    return width, height
 
 
 def _target_fps(raw_video: dict[str, Any]) -> float:
@@ -1215,12 +1284,14 @@ def _probe_video(path: Path) -> dict[str, Any]:
     duration = _parse_duration(output)
     width, height = _parse_resolution(video_line)
     fps = _parse_fps(video_line)
+    rotation = _parse_rotation_degrees(output)
     return {
         "durationSeconds": duration,
         "width": width,
         "height": height,
         "fps": fps,
         "hasAudioTrack": " Audio:" in output,
+        "rotationDegrees": rotation,
     }
 
 
@@ -1245,7 +1316,7 @@ def _decode_alignment_audio(path: Path, stream_selector: str) -> np.ndarray:
         "s16le",
         "-",
     ]
-    completed = subprocess.run(command, capture_output=True, timeout=60)
+    completed = subprocess.run(command, capture_output=True, timeout=300)
     if completed.returncode != 0:
         raise ValueError((completed.stderr or b"").decode("utf-8", errors="replace").strip() or "Could not decode audio for auto-sync.")
     if not completed.stdout:
@@ -1289,7 +1360,7 @@ def _estimate_audio_offset_ms(video_audio: np.ndarray, master_audio: np.ndarray)
         raise ValueError("Auto-sync needs more overlapping audio.")
     video_audio = video_audio[:length]
     master_audio = master_audio[:length]
-    max_lag = min(AUDIO_ALIGN_SAMPLE_RATE * 8, length // 2)
+    max_lag = min(AUDIO_ALIGN_SAMPLE_RATE * AUDIO_ALIGN_MAX_LAG_SECONDS, length // 2)
     corr = signal.correlate(video_audio, master_audio, mode="full", method="fft")
     center = master_audio.size - 1
     window = corr[center - max_lag : center + max_lag + 1]
@@ -1303,6 +1374,73 @@ def _estimate_audio_offset_ms(video_audio: np.ndarray, master_audio: np.ndarray)
     return offset_ms, confidence
 
 
+def _sync_video_clips_to_audio(project: dict[str, Any], settings: dict[str, Any], asset: dict[str, Any], force: bool = False) -> dict[str, dict[str, float | int]]:
+    audio_path = resolve_stored_file_path(asset["filePath"])
+    if not audio_path.exists():
+        raise ValueError("Selected mastered audio file is missing from local storage.")
+    clips = _raw_video_clips(settings)
+    syncable_clips = [clip for clip in clips if clip.get("hasAudioTrack")]
+    if not syncable_clips:
+        raise ValueError("Upload video clips with original audio before running auto-sync.")
+
+    primary = _primary_raw_video(settings)
+    primary_id = str(primary.get("id") or "") if primary else ""
+    master_audio: np.ndarray | None = None
+    results: dict[str, dict[str, float | int]] = {}
+    analyzed_at = utc_now_iso()
+    for clip in syncable_clips:
+        clip_id = str(clip.get("id") or "")
+        if (
+            not force
+            and clip.get("syncAudioAssetId") == asset.get("id")
+            and clip.get("audioOffsetMs") is not None
+        ):
+            offset_ms = int(clip.get("audioOffsetMs") or 0)
+            confidence = float(clip.get("syncConfidence") or 0)
+            results[clip_id] = {"offsetMs": offset_ms, "confidence": confidence}
+            if clip_id == primary_id:
+                settings["audioOffsetMs"] = offset_ms
+            continue
+
+        try:
+            if master_audio is None:
+                master_audio = _decode_alignment_audio(audio_path, stream_selector="0:a:0")
+            video_audio = _decode_alignment_audio(resolve_stored_file_path(clip["filePath"]), stream_selector="0:a:0")
+            offset_ms, confidence = _estimate_audio_offset_ms(video_audio, master_audio)
+        except Exception:
+            if clip_id == primary_id:
+                raise
+            continue
+
+        clip["audioOffsetMs"] = int(offset_ms)
+        clip["syncConfidence"] = round(float(confidence), 3)
+        clip["syncAudioAssetId"] = asset.get("id")
+        clip["syncAnalyzedAt"] = analyzed_at
+        results[clip_id] = {"offsetMs": int(offset_ms), "confidence": float(confidence)}
+        if clip_id == primary_id:
+            settings["audioOffsetMs"] = int(offset_ms)
+
+    if primary_id and primary_id not in results:
+        raise ValueError("Auto-sync could not estimate the primary video offset.")
+    _sync_primary_raw_video(settings)
+    return results
+
+
+def _synced_focus_source_start(primary_clip: dict[str, Any], focus_clip: dict[str, Any], insert: dict[str, float | int]) -> float | None:
+    source_start = float(insert.get("sourceStart", 0.0) or 0.0)
+    primary_offset = primary_clip.get("audioOffsetMs")
+    focus_offset = focus_clip.get("audioOffsetMs")
+    if primary_offset is None or focus_offset is None:
+        return source_start
+    duration = max(0.0, float(insert.get("duration", 0.0) or 0.0))
+    clip_duration = max(duration, float(focus_clip.get("durationSeconds") or duration or 0.0))
+    max_start = max(0.0, clip_duration - duration)
+    synced_start = source_start + (int(focus_offset) - int(primary_offset)) / 1000.0
+    if synced_start < -0.05 or synced_start > max_start + 0.05:
+        return None
+    return round(max(0.0, min(max_start, synced_start)), 3)
+
+
 def _raw_video_clips(settings: dict[str, Any]) -> list[dict[str, Any]]:
     clips = [item for item in settings.get("rawVideos", []) if isinstance(item, dict) and item.get("filePath")]
     if clips:
@@ -1311,6 +1449,27 @@ def _raw_video_clips(settings: dict[str, Any]) -> list[dict[str, Any]]:
         return [*primary[:1], *secondary]
     raw_video = settings.get("rawVideo")
     return [raw_video] if isinstance(raw_video, dict) and raw_video.get("filePath") else []
+
+
+def _refresh_raw_video_metadata(settings: dict[str, Any]) -> bool:
+    changed = False
+    for clip in _raw_video_clips(settings):
+        if "rotationDegrees" in clip and clip.get("width") and clip.get("height") and clip.get("fps") is not None:
+            continue
+        path = resolve_stored_file_path(clip.get("filePath", ""))
+        if not path.exists():
+            continue
+        try:
+            metadata = _probe_video(path)
+        except Exception:
+            continue
+        for key in ("durationSeconds", "width", "height", "fps", "hasAudioTrack", "rotationDegrees"):
+            if key in metadata and clip.get(key) != metadata.get(key):
+                clip[key] = metadata.get(key)
+                changed = True
+    if changed:
+        _sync_primary_raw_video(settings)
+    return changed
 
 
 def _sync_primary_raw_video(settings: dict[str, Any]) -> None:
@@ -1848,6 +2007,34 @@ def _delete_previous_raw_video(raw_video: dict[str, Any] | None) -> None:
     if not path_value:
         return
     path = resolve_stored_file_path(path_value)
+    _delete_file_quietly(path)
+
+
+def _delete_render_file(render_record: dict[str, Any] | None, keep_path: str | None = None) -> None:
+    if not render_record:
+        return
+    path_value = render_record.get("filePath")
+    if not path_value or path_value == keep_path:
+        return
+    _delete_file_quietly(resolve_stored_file_path(path_value))
+
+
+def _clear_missing_preview_render(settings: dict[str, Any]) -> bool:
+    preview = settings.get("previewRender")
+    if not isinstance(preview, dict) or not preview.get("filePath"):
+        return False
+    try:
+        path = resolve_stored_file_path(preview["filePath"])
+        if path.exists() and path.stat().st_size > 0:
+            return False
+    except OSError:
+        pass
+    _delete_file_quietly(path)
+    settings["previewRender"] = None
+    return True
+
+
+def _delete_file_quietly(path: Path) -> None:
     try:
         if path.exists():
             path.unlink()
@@ -1919,6 +2106,19 @@ def _parse_resolution(video_line: str) -> tuple[int | None, int | None]:
 def _parse_fps(video_line: str) -> float | None:
     match = re.search(r"(\d+(?:\.\d+)?)\s*fps", video_line)
     return round(float(match.group(1)), 3) if match else None
+
+
+def _parse_rotation_degrees(output: str) -> int:
+    matrix_match = re.search(r"displaymatrix:\s*rotation of\s*(-?\d+(?:\.\d+)?)\s*degrees", output, flags=re.IGNORECASE)
+    rotate_match = re.search(r"\brotate\s*:\s*(-?\d+(?:\.\d+)?)", output, flags=re.IGNORECASE)
+    match = matrix_match or rotate_match
+    if not match:
+        return 0
+    degrees = int(round(float(match.group(1))))
+    normalized = degrees % 360
+    if normalized in {0, 90, 180, 270}:
+        return normalized
+    return min((0, 90, 180, 270), key=lambda item: abs(item - normalized))
 
 
 def _seconds_arg(value: float) -> str:

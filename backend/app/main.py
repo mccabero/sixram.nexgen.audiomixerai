@@ -96,8 +96,6 @@ from .recording import recording_manager
 from .video_editor import (
     apply_branding_template,
     create_branding_template,
-    create_video_preview_job,
-    create_video_render_job,
     cancel_video_render_job,
     delete_raw_video,
     delete_branding_template,
@@ -105,6 +103,8 @@ from .video_editor import (
     get_video_editor_state,
     get_video_render_job,
     get_video_waveforms,
+    queue_video_preview_job,
+    queue_video_render_job,
     run_video_auto_sync,
     run_video_preview_job,
     run_video_render_job,
@@ -296,16 +296,18 @@ def api_run_video_auto_sync(project_id: str) -> VideoEditorStateResponse:
 
 @app.post("/api/projects/{project_id}/video-editor/export-job", response_model=ProcessingJob)
 def api_start_video_export_job(project_id: str, background_tasks: BackgroundTasks) -> ProcessingJob:
-    job = create_video_render_job(project_id)
-    background_tasks.add_task(run_video_render_job, project_id, job.id)
-    return job
+    result = queue_video_render_job(project_id)
+    if result.should_start:
+        background_tasks.add_task(run_video_render_job, project_id, result.job.id)
+    return result.job
 
 
 @app.post("/api/projects/{project_id}/video-editor/preview-job", response_model=ProcessingJob)
 def api_start_video_preview_job(project_id: str, background_tasks: BackgroundTasks) -> ProcessingJob:
-    job = create_video_preview_job(project_id)
-    background_tasks.add_task(run_video_preview_job, project_id, job.id)
-    return job
+    result = queue_video_preview_job(project_id)
+    if result.should_start:
+        background_tasks.add_task(run_video_preview_job, project_id, result.job.id)
+    return result.job
 
 
 @app.get("/api/projects/{project_id}/video-editor/jobs/{job_id}", response_model=ProcessingJob)

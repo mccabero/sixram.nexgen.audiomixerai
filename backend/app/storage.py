@@ -30,13 +30,22 @@ class JsonStore:
     def load(self) -> dict[str, Any]:
         self.ensure_storage()
         with self._lock:
-            try:
-                with DB_PATH.open("r", encoding="utf-8") as db_file:
-                    data = json.load(db_file)
-                    _ensure_data_defaults(data)
-                    return data
-            except json.JSONDecodeError as exc:
-                raise HTTPException(status_code=500, detail="Metadata database is invalid JSON.") from exc
+            last_error: PermissionError | None = None
+            for attempt in range(10):
+                try:
+                    with DB_PATH.open("r", encoding="utf-8") as db_file:
+                        data = json.load(db_file)
+                        _ensure_data_defaults(data)
+                        return data
+                except PermissionError as exc:
+                    last_error = exc
+                    time.sleep(0.05 * (attempt + 1))
+                except json.JSONDecodeError as exc:
+                    raise HTTPException(status_code=500, detail="Metadata database is invalid JSON.") from exc
+        raise HTTPException(
+            status_code=500,
+            detail="Could not read local metadata because app_data.json is locked. Close duplicate backend windows and retry.",
+        ) from last_error
 
     def save(self, data: dict[str, Any]) -> None:
         with self._lock:
