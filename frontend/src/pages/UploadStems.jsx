@@ -1,10 +1,11 @@
-import { ArrowLeft, BarChart3, CheckCircle2, FileAudio, Mic, RefreshCw, Square, UploadCloud, X } from "lucide-react";
+import { ArrowLeft, BarChart3, CheckCircle2, FileAudio, Mic, RefreshCw, Square, Trash2, UploadCloud } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { getProject, updateStemType, uploadStems } from "../api.js";
 import Button from "../components/Button.jsx";
 import DirectMultitrackRecorder from "../components/DirectMultitrackRecorder.jsx";
 import ProcessingPanel from "../components/ProcessingPanel.jsx";
+import QueuedStemCard from "../components/QueuedStemCard.jsx";
 import StemList from "../components/StemList.jsx";
 import { MAX_UPLOAD_BYTES, MAX_UPLOAD_MB, SUPPORTED_EXTENSIONS } from "../constants.js";
 import { formatBytes } from "../utils/format.js";
@@ -37,6 +38,9 @@ export default function UploadStems() {
   const [recording, setRecording] = useState(false);
   const [recordingSeconds, setRecordingSeconds] = useState(0);
   const [showBrowserFallback, setShowBrowserFallback] = useState(false);
+  const [playingKey, setPlayingKey] = useState("");
+  const [pageDragActive, setPageDragActive] = useState(false);
+  const dragDepthRef = useRef(0);
 
   const loadProject = useCallback(() => {
     setLoadingProject(true);
@@ -151,6 +155,59 @@ export default function UploadStems() {
       releaseRecordingResources();
     };
   }, [releaseRecordingResources]);
+
+  // Accept files dropped anywhere on the page, not just inside the drop zone.
+  useEffect(() => {
+    const hasFiles = (event) => Array.from(event.dataTransfer?.types || []).includes("Files");
+
+    const onDragEnter = (event) => {
+      if (!hasFiles(event)) return;
+      event.preventDefault();
+      dragDepthRef.current += 1;
+      setPageDragActive(true);
+    };
+    const onDragOver = (event) => {
+      if (hasFiles(event)) event.preventDefault();
+    };
+    const onDragLeave = (event) => {
+      if (!hasFiles(event)) return;
+      dragDepthRef.current = Math.max(0, dragDepthRef.current - 1);
+      if (dragDepthRef.current === 0) setPageDragActive(false);
+    };
+    const onDrop = (event) => {
+      if (!hasFiles(event)) return;
+      event.preventDefault();
+      dragDepthRef.current = 0;
+      setPageDragActive(false);
+      setInputMode("upload");
+      addFiles(event.dataTransfer.files);
+    };
+
+    window.addEventListener("dragenter", onDragEnter);
+    window.addEventListener("dragover", onDragOver);
+    window.addEventListener("dragleave", onDragLeave);
+    window.addEventListener("drop", onDrop);
+    return () => {
+      window.removeEventListener("dragenter", onDragEnter);
+      window.removeEventListener("dragover", onDragOver);
+      window.removeEventListener("dragleave", onDragLeave);
+      window.removeEventListener("drop", onDrop);
+    };
+  }, [addFiles]);
+
+  const removeFile = useCallback((file) => {
+    setSelectedFiles((current) => current.filter((item) => item !== file));
+  }, []);
+
+  const clearQueue = useCallback(() => {
+    setSelectedFiles([]);
+    setPlayingKey("");
+    setUploadErrors([]);
+  }, []);
+
+  const togglePreview = useCallback((key) => {
+    setPlayingKey((current) => (current === key ? "" : key));
+  }, []);
 
   const handleDrop = (event) => {
     event.preventDefault();
@@ -298,6 +355,20 @@ export default function UploadStems() {
 
   return (
     <div>
+      {pageDragActive ? (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-black/70 p-6 backdrop-blur-sm">
+          <div className="flex flex-col items-center gap-4 rounded-2xl border-2 border-dashed border-teal-200/60 bg-teal-300/10 px-10 py-12 text-center shadow-[0_0_60px_rgba(45,212,191,0.2)]">
+            <span className="grid h-20 w-20 place-items-center rounded-2xl border border-teal-200/40 bg-teal-300/15 text-teal-100">
+              <UploadCloud size={34} />
+            </span>
+            <div>
+              <p className="text-2xl font-semibold text-white">Drop to add stems</p>
+              <p className="mt-1 text-sm text-teal-100/80">Release anywhere to queue these files.</p>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
       <Link to={`/projects/${projectId}`} className="inline-flex items-center gap-2 text-sm text-zinc-300 hover:text-white">
         <ArrowLeft size={16} />
         Back to project
@@ -483,37 +554,36 @@ export default function UploadStems() {
             <h2 className="font-semibold text-white">Ready to upload</h2>
             <p className="mt-1 text-sm text-zinc-500">{selectedFiles.length} file{selectedFiles.length === 1 ? "" : "s"} queued, {formatBytes(queuedTotalBytes)} total</p>
           </div>
-          <span className="inline-flex items-center gap-2 rounded-full border border-teal-300/20 bg-teal-300/10 px-3 py-1 text-xs font-semibold text-teal-100">
-            <CheckCircle2 size={14} />
-            Ready
-          </span>
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={clearQueue}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-white/10 bg-white/[0.04] px-3 py-1.5 text-xs font-semibold text-zinc-300 transition hover:border-rose-300/30 hover:bg-rose-400/10 hover:text-rose-100"
+            >
+              <Trash2 size={14} />
+              Clear all
+            </button>
+            <span className="inline-flex items-center gap-2 rounded-full border border-teal-300/20 bg-teal-300/10 px-3 py-1 text-xs font-semibold text-teal-100">
+              <CheckCircle2 size={14} />
+              Ready
+            </span>
+          </div>
         </div>
           <div className="grid gap-3 p-4 md:grid-cols-2 xl:grid-cols-3">
-            {selectedFiles.map((file) => (
-              <div key={`${file.name}-${file.lastModified}-${file.size}`} className="flex min-w-0 items-start justify-between gap-4 rounded-lg border border-white/10 bg-black/20 p-3">
-                <div className="min-w-0">
-                  <div className="flex min-w-0 flex-wrap items-center gap-2">
-                    <p className="max-w-full truncate text-sm font-semibold text-white">{file.name}</p>
-                    <span className="rounded-full border border-white/10 bg-white/[0.055] px-2 py-0.5 text-[11px] font-semibold uppercase text-zinc-300">
-                      {getExtension(file.name).replace(".", "") || "audio"}
-                    </span>
-                  </div>
-                  <p className="mt-1 text-xs text-zinc-500">{formatBytes(file.size)}</p>
-                  <span className="mt-3 inline-flex rounded-full border border-teal-300/20 bg-teal-300/10 px-2.5 py-1 text-xs font-semibold text-teal-100">
-                    {guessStemChip(file.name)}
-                  </span>
-                </div>
-                <button
-                  type="button"
-                  className="grid h-9 w-9 shrink-0 place-items-center rounded-lg border border-white/10 text-zinc-300 hover:bg-white/[0.06]"
-                  onClick={() => setSelectedFiles((current) => current.filter((item) => item !== file))}
-                  aria-label={`Remove ${file.name}`}
-                  title="Remove file"
-                >
-                  <X size={16} />
-                </button>
-              </div>
-            ))}
+            {selectedFiles.map((file) => {
+              const fileKey = `${file.name}-${file.lastModified}-${file.size}`;
+              return (
+                <QueuedStemCard
+                  key={fileKey}
+                  file={file}
+                  fileKey={fileKey}
+                  stemGuess={guessStemChip(file.name)}
+                  isPlaying={playingKey === fileKey}
+                  onTogglePlay={togglePreview}
+                  onRemove={removeFile}
+                />
+              );
+            })}
           </div>
       </section>
       ) : null}

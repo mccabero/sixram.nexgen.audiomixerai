@@ -209,6 +209,30 @@ def _run_analysis_job(project_id: str, job_id: str) -> None:
     append_project_log(project_subdirs(project_id)["logs"], f"Analysis job {job_id} {final_status.lower()}.")
 
 
+def _mix_source_metrics(stem: dict[str, Any]) -> tuple[float | None, float | None, str]:
+    """Return (integratedLufs, peakDbfs, source_label) for the audio that will
+    actually be summed into the mix. The mixer prefers the enhanced vocal, then
+    the cleaned stem, then the original — balancing against the original when a
+    much quieter enhanced/cleaned version is used is what buries vocals, so
+    target whichever source is really going into the mix."""
+    enhancement = stem.get("vocalEnhancementResult") or {}
+    enhancement_settings = stem.get("vocalEnhancementSettings") or {}
+    if enhancement.get("status") == "Completed" and enhancement_settings.get("useEnhancedInMix", True):
+        metrics = enhancement.get("enhancedMetrics") or {}
+        if metrics.get("integratedLufs") is not None:
+            return metrics.get("integratedLufs"), metrics.get("peakDbfs"), "enhanced vocal"
+
+    cleaning = stem.get("cleaningResult") or {}
+    cleaning_settings = stem.get("cleaningSettings") or {}
+    if cleaning.get("status") == "Completed" and cleaning_settings.get("useCleanedInMix", True):
+        metrics = cleaning.get("cleanedMetrics") or {}
+        if metrics.get("integratedLufs") is not None:
+            return metrics.get("integratedLufs"), metrics.get("peakDbfs"), "cleaned stem"
+
+    analysis = stem.get("analysisResult") or {}
+    return analysis.get("integratedLufs"), analysis.get("peakDbfs"), "original"
+
+
 def generate_auto_balance(project_id: str) -> Project:
     data = store.load()
     project = _find_project(data, project_id)
@@ -219,11 +243,9 @@ def generate_auto_balance(project_id: str) -> Project:
     for stem in project.get("stems", []):
         stem_type = effective_stem_type(stem)
         type_counters[stem_type] = type_counters.get(stem_type, 0) + 1
-        analysis = stem.get("analysisResult") or {}
         role = ROLE_TARGETS.get(stem_type, ROLE_TARGETS["Unknown"])
         target_lufs = role["target"]
-        measured_lufs = analysis.get("integratedLufs")
-        peak_dbfs = analysis.get("peakDbfs")
+        measured_lufs, peak_dbfs, source_label = _mix_source_metrics(stem)
 
         if measured_lufs is None:
             suggested_gain = 0.0
@@ -233,7 +255,8 @@ def generate_auto_balance(project_id: str) -> Project:
             if peak_dbfs is not None:
                 max_gain_for_headroom = -3.0 - float(peak_dbfs)
                 suggested_gain = min(suggested_gain, max_gain_for_headroom)
-            rationale = f"Targets {target_lufs:.1f} LUFS for {stem_type.lower()} role."
+            source_note = "" if source_label == "original" else f" (from {source_label})"
+            rationale = f"Targets {target_lufs:.1f} LUFS for {stem_type.lower()} role{source_note}."
 
         suggestion = {
             "stemId": stem["id"],

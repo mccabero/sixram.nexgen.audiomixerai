@@ -1,5 +1,5 @@
-import { ArrowLeft, Check, ChevronDown, Gauge, Headphones, MicOff, Pencil, Play, RefreshCw, RotateCcw, Settings2, SlidersHorizontal, Sparkles, Trash2, Volume2, WandSparkles, X } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { ArrowLeft, Check, ChevronDown, Gauge, Headphones, MicOff, Pencil, Play, RefreshCw, RotateCcw, Settings2, SlidersHorizontal, Sparkles, Trash2, Undo2, Volume2, WandSparkles, X } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import {
   applyAutoBalance,
@@ -21,6 +21,7 @@ import {
   updateMixControls,
   updateMixStem,
 } from "../api.js";
+import ABComparePlayer from "../components/ABComparePlayer.jsx";
 import Button from "../components/Button.jsx";
 import EmptyState from "../components/EmptyState.jsx";
 import ProcessingPanel from "../components/ProcessingPanel.jsx";
@@ -75,6 +76,9 @@ export default function MixerPage() {
   const [editingVersionId, setEditingVersionId] = useState("");
   const [versionDraft, setVersionDraft] = useState("");
   const [showMoreTools, setShowMoreTools] = useState(true);
+  const controlsUndoRef = useRef([]);
+  const lastControlsRef = useRef(null);
+  const [undoDepth, setUndoDepth] = useState(0);
 
   const stems = project?.stems || [];
   const mixSettings = project?.mixSettings || {};
@@ -125,6 +129,7 @@ export default function MixerPage() {
     try {
       const [nextProject, presetPayload] = await Promise.all([getProject(projectId), listMixPresets().catch(() => null)]);
       setProject(nextProject);
+      recordCommittedControls(nextProject.mixSettings?.controls);
       if (presetPayload?.presets?.length) setPresets(presetPayload.presets);
     } catch (err) {
       setError(err.message);
@@ -220,8 +225,11 @@ export default function MixerPage() {
   const runResetAdvancedMix = async () => {
     setActionLoading("reset");
     setError("");
+    pushControlsHistory();
     try {
-      setProject(await resetAdvancedMix(projectId));
+      const nextProject = await resetAdvancedMix(projectId);
+      setProject(nextProject);
+      recordCommittedControls(nextProject.mixSettings?.controls);
       setRoughMix(null);
       setPreviewNotice("Auto mix settings reset. Generate a new mix version to hear the update.");
     } catch (err) {
@@ -389,12 +397,50 @@ export default function MixerPage() {
     });
   };
 
+  const recordCommittedControls = (nextControls) => {
+    lastControlsRef.current = { ...defaultControls, ...(nextControls || {}) };
+  };
+
+  const pushControlsHistory = () => {
+    if (!lastControlsRef.current) return;
+    const stack = controlsUndoRef.current;
+    stack.push(lastControlsRef.current);
+    if (stack.length > 30) stack.shift();
+    setUndoDepth(stack.length);
+  };
+
+  const undoControls = async () => {
+    const stack = controlsUndoRef.current;
+    if (!stack.length) return;
+    const snapshot = stack.pop();
+    setUndoDepth(stack.length);
+    setActionLoading("undo");
+    setError("");
+    try {
+      const nextProject = await updateMixControls(projectId, snapshot);
+      setProject(nextProject);
+      recordCommittedControls(nextProject.mixSettings?.controls);
+      setPreviewNotice("Reverted mix controls. Generate a new mix version to hear the update.");
+    } catch (err) {
+      stack.push(snapshot);
+      setUndoDepth(stack.length);
+      setError(err.message);
+    } finally {
+      setActionLoading("");
+    }
+  };
+
   const commitControls = async (updates) => {
     setActionLoading("controls");
     setError("");
+    pushControlsHistory();
     try {
-      setProject(await updateMixControls(projectId, updates));
+      const nextProject = await updateMixControls(projectId, updates);
+      setProject(nextProject);
+      recordCommittedControls(nextProject.mixSettings?.controls);
     } catch (err) {
+      controlsUndoRef.current.pop();
+      setUndoDepth(controlsUndoRef.current.length);
       setError(err.message);
     } finally {
       setActionLoading("");
@@ -405,8 +451,10 @@ export default function MixerPage() {
     setActionLoading("vocalSpace");
     setError("");
     setRoughMix(null);
+    pushControlsHistory();
     try {
       let nextProject = await updateMixControls(projectId, sunoVocalSpaceControls);
+      recordCommittedControls(nextProject.mixSettings?.controls);
       for (const stem of leadVocalStems) {
         nextProject = await updateMixStem(projectId, stem.id, sunoLeadVocalSendSettings);
       }
@@ -425,11 +473,15 @@ export default function MixerPage() {
   const changePreset = async (preset) => {
     setActionLoading("preset");
     setError("");
+    pushControlsHistory();
     try {
       const nextProject = await updateMixControls(projectId, { preset });
       setProject(nextProject);
+      recordCommittedControls(nextProject.mixSettings?.controls);
       setPreviewNotice("Preset changed. Generate a new mix version to hear the update.");
     } catch (err) {
+      controlsUndoRef.current.pop();
+      setUndoDepth(controlsUndoRef.current.length);
       setError(err.message);
     } finally {
       setActionLoading("");
@@ -705,7 +757,13 @@ export default function MixerPage() {
               <h2 className="font-semibold text-white">Auto Mix Controls</h2>
               <p className="mt-1 text-sm text-zinc-400">{presetDescription(presets, controls.preset)}</p>
             </div>
-            <StatusBadge status={latestVersion ? "Advanced Mix Ready" : "Pending"} />
+            <div className="flex items-center gap-3">
+              <Button type="button" variant="ghost" onClick={undoControls} disabled={!undoDepth || actionLoading === "undo"} title={undoDepth ? `Undo last control change (${undoDepth} step${undoDepth === 1 ? "" : "s"})` : "No control changes to undo"}>
+                <Undo2 size={16} />
+                Undo
+              </Button>
+              <StatusBadge status={latestVersion ? "Advanced Mix Ready" : "Pending"} />
+            </div>
           </div>
           <div className="mt-4 grid gap-4 sm:grid-cols-2">
             <label className="block">
@@ -815,9 +873,16 @@ function MixPreviewPanel({
       ) : null}
 
       {comparisonOptions.length ? (
-        <div className="mt-4 grid gap-4 md:grid-cols-2">
-          <CompareSlot label="A" options={comparisonOptions} selected={compareA} onChange={setCompareA} item={selectedA} variant="teal" />
-          <CompareSlot label="B" options={comparisonOptions} selected={compareB} onChange={setCompareB} item={selectedB} variant="amber" />
+        <div className="mt-4">
+          <ABComparePlayer
+            options={comparisonOptions}
+            compareA={compareA}
+            compareB={compareB}
+            setCompareA={setCompareA}
+            setCompareB={setCompareB}
+            selectedA={selectedA}
+            selectedB={selectedB}
+          />
         </div>
       ) : (
         <p className="mt-4 rounded-lg border border-white/10 bg-black/20 px-3 py-3 text-sm text-zinc-500">Render a rough mix or advanced mix to compare versions.</p>
@@ -929,37 +994,6 @@ function ToolGroup({ icon: Icon, title, description, children }) {
         </div>
       </div>
       <div className="mt-4 flex flex-col gap-2 sm:flex-row sm:flex-wrap">{children}</div>
-    </div>
-  );
-}
-
-function CompareSlot({ label, options, selected, onChange, item, variant }) {
-  return (
-    <div className="rounded-lg border border-white/10 bg-black/20 p-3">
-      <label className="block">
-        <span className="mb-2 block text-xs font-semibold uppercase tracking-[0.12em] text-zinc-500">Compare {label}</span>
-        <select value={selected} onChange={(event) => onChange(event.target.value)} className="h-10 w-full rounded-lg border border-white/10 bg-black/25 px-3 text-sm text-white">
-          {options.map((option) => (
-            <option key={option.id} value={option.id}>
-              {option.label}
-            </option>
-          ))}
-        </select>
-      </label>
-      {item?.url ? (
-        <div className="mt-3 space-y-2">
-          <div className="flex flex-wrap items-center gap-2">
-            {item.kind === "Preview" ? (
-              <span className="inline-flex rounded-full border border-amber-200/30 bg-amber-300/15 px-2.5 py-1 text-[11px] font-bold uppercase tracking-[0.12em] text-amber-100">
-                Preview
-              </span>
-            ) : null}
-            <p className="min-w-0 flex-1 truncate text-xs text-zinc-500">{item.path}</p>
-          </div>
-          <WaveformPreview src={item.url} variant={variant} />
-          <audio className="w-full" src={item.url} controls />
-        </div>
-      ) : null}
     </div>
   );
 }
@@ -1150,6 +1184,7 @@ function actionPanelFor(actionLoading, savingStemId, mixJob, onStopMix, stopping
   if (actionLoading === "deleteRough") return { title: "Deleting Rough Preview", message: "Removing the generated rough mix preview." };
   if (actionLoading === "deleteAllVersions") return { title: "Deleting Mix Versions", message: "Removing mix versions, rough preview, masters, and exports." };
   if (actionLoading === "vocalSpace") return { title: "Saving Vocal Space", message: "Updating vocal reverb, delay, and lead vocal sends." };
+  if (actionLoading === "undo") return { title: "Reverting Mix Controls", message: "Restoring the previous advanced mix control values." };
   if (actionLoading === "controls" || actionLoading === "preset") return { title: "Saving Mix Controls", message: "Updating advanced mix controls." };
   if (savingStemId) return { title: "Saving Stem Setting", message: "Updating the selected stem setting." };
   return null;

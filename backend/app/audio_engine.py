@@ -775,9 +775,11 @@ def generate_advanced_mix(stem_inputs: list[dict], output_dir: Path, version_num
     room_size = _control_ratio(controls, "roomSize")
     global_reverb = _control_ratio(controls, "reverbAmount")
     vocal_reverb = _control_ratio(controls, "vocalReverbAmount")
-    _add_to_bus(mix, _simple_reverb(vocal_send, ROUGH_MIX_SAMPLE_RATE, amount=0.22 * global_reverb + 0.28 * vocal_reverb, room_size=0.45 + room_size * 0.45))
-    _add_to_bus(mix, _simple_reverb(drum_send, ROUGH_MIX_SAMPLE_RATE, amount=0.13 * global_reverb, room_size=0.25 + room_size * 0.25))
-    _add_to_bus(mix, _simple_reverb(space_send, ROUGH_MIX_SAMPLE_RATE, amount=0.24 * global_reverb, room_size=0.55 + room_size * 0.55))
+    # Vocal reverb is the star of the "finished" sound: audible, lush, wide.
+    vocal_reverb_amount = 0.18 + 0.85 * vocal_reverb + 0.32 * global_reverb
+    _add_to_bus(mix, _simple_reverb(vocal_send, ROUGH_MIX_SAMPLE_RATE, amount=vocal_reverb_amount, room_size=0.60 + room_size * 0.55))
+    _add_to_bus(mix, _simple_reverb(drum_send, ROUGH_MIX_SAMPLE_RATE, amount=0.10 + 0.30 * global_reverb, room_size=0.25 + room_size * 0.25))
+    _add_to_bus(mix, _simple_reverb(space_send, ROUGH_MIX_SAMPLE_RATE, amount=0.15 + 0.55 * global_reverb, room_size=0.55 + room_size * 0.55))
 
     _progress(progress_callback, 0.84, "Applying mix tone and safety")
     mix = _apply_master_tone(mix, ROUGH_MIX_SAMPLE_RATE, controls)
@@ -1186,10 +1188,24 @@ def _reduce_noise(audio: np.ndarray, sample_rate: int, strength: float, noise_pr
         return audio
     if nr is not None:
         try:
+            have_profile = noise_profile is not None and noise_profile.size > 0
             channels = []
             for channel_index in range(audio.shape[1]):
-                y_noise = noise_profile[:, channel_index] if noise_profile is not None and noise_profile.size else None
-                reduced = nr.reduce_noise(y=audio[:, channel_index], sr=sample_rate, y_noise=y_noise, prop_decrease=strength, stationary=False)
+                y_noise = noise_profile[:, channel_index] if have_profile else None
+                reduced = nr.reduce_noise(
+                    y=audio[:, channel_index],
+                    sr=sample_rate,
+                    y_noise=y_noise,
+                    prop_decrease=strength,
+                    # A measured noise clip is a stationary floor (hiss/hum residue);
+                    # stationary spectral subtraction against it is cleaner and avoids
+                    # the musical-noise artifacts the non-stationary estimator adds on
+                    # tonal material. Fall back to adaptive mode with no profile.
+                    stationary=have_profile,
+                    n_std_thresh_stationary=1.5,
+                    freq_mask_smooth_hz=500,
+                    time_mask_smooth_ms=64,
+                )
                 channels.append(reduced)
             return _sanitize_audio(np.stack(channels, axis=1))
         except Exception:
@@ -1219,23 +1235,49 @@ def _noise_profile(audio: np.ndarray, sample_rate: int) -> np.ndarray | None:
 
 def _spectral_noise_reduction(audio: np.ndarray, sample_rate: int, strength: float) -> np.ndarray:
     audio = _sanitize_audio(audio)
+    strength = max(0.0, min(0.9, strength))
+    if strength <= 0:
+        return audio
     reduced_channels = []
+    nperseg = 2048
+    noverlap = 1536
+    # Oversubtraction and a residual spectral floor: attenuating noise bins to a
+    # floor rather than zero, then smoothing the gain mask, avoids the "musical
+    # noise" (warbly birdies) a hard binary gate produces.
+    oversub = 1.0 + strength * 1.4
+    spectral_floor = max(0.03, 1.0 - strength * 0.92)
     for channel_index in range(audio.shape[1]):
         channel = audio[:, channel_index]
-        freqs, times, stft = signal.stft(channel, fs=sample_rate, nperseg=2048, noverlap=1536)
+        freqs, times, stft = signal.stft(channel, fs=sample_rate, nperseg=nperseg, noverlap=noverlap)
         magnitude = np.abs(stft)
         if magnitude.size == 0:
             reduced_channels.append(channel)
             continue
+        phase = np.angle(stft)
         frame_energy = np.mean(magnitude, axis=0)
         quiet = frame_energy <= np.percentile(frame_energy, 25)
         noise = np.median(magnitude[:, quiet], axis=1, keepdims=True) if np.any(quiet) else np.median(magnitude, axis=1, keepdims=True)
-        threshold = noise * (1.15 + strength * 2.4)
-        attenuation = 1.0 - strength * 0.75
-        gain = np.where(magnitude < threshold, attenuation, 1.0)
-        _freqs, cleaned = signal.istft(stft * gain, fs=sample_rate, nperseg=2048, noverlap=1536)
+        power = magnitude ** 2
+        noise_power = (noise * oversub) ** 2
+        gain = np.sqrt(np.maximum(power - noise_power, 0.0) / (power + 1e-10))
+        gain = spectral_floor + (1.0 - spectral_floor) * gain
+        gain = _smooth_spectral_gain(gain)
+        _freqs, cleaned = signal.istft(magnitude * gain * np.exp(1j * phase), fs=sample_rate, nperseg=nperseg, noverlap=noverlap)
         reduced_channels.append(_match_length(cleaned, channel.shape[0]))
     return _sanitize_audio(np.stack(reduced_channels, axis=1))
+
+
+def _smooth_spectral_gain(gain: np.ndarray) -> np.ndarray:
+    """Box-smooth a time-frequency gain mask over both axes to suppress isolated
+    bin flicker (the source of musical-noise artifacts)."""
+    if gain.ndim != 2 or gain.size == 0:
+        return gain
+    try:
+        from scipy.ndimage import uniform_filter
+
+        return uniform_filter(gain, size=(3, 3), mode="nearest")
+    except Exception:
+        return gain
 
 
 def _noise_gate(audio: np.ndarray, sample_rate: int, strength: float, floor: float) -> np.ndarray:
@@ -1702,17 +1744,17 @@ def _vocal_enhancer_parameters(preset: str) -> dict[str, float]:
         "Suno-Style Lead": {
             "highPassHz": 100,
             "noiseReduction": 0.18,
-            "deEss": 0.58,
-            "rider": 0.62,
+            "deEss": 0.62,
+            "rider": 0.72,
             "bodyDb": -0.1,
-            "presenceDb": 1.70,
-            "airDb": 1.55,
-            "compression": 0.64,
-            "compressionThresholdDb": -24,
-            "compressionRatio": 3.4,
-            "saturation": 0.055,
-            "doubler": 0.045,
-            "width": 0.015,
+            "presenceDb": 2.25,
+            "airDb": 2.20,
+            "compression": 0.74,
+            "compressionThresholdDb": -25,
+            "compressionRatio": 3.9,
+            "saturation": 0.085,
+            "doubler": 0.05,
+            "width": 0.02,
             "breathReduction": 0.24,
             "mouthClickReduction": 0.22,
         },
@@ -1852,40 +1894,131 @@ def _scale_preset_amount(base_value: float, amount: float, max_value: float = 1.
 
 
 def _pitch_polish(audio: np.ndarray, sample_rate: int, mode: str, key: str, scale: str, strength: float = 50, humanize: float = 60) -> tuple[np.ndarray, str, str | None]:
+    """Per-note pitch correction. Tracks pitch over time, segments the take into
+    individual notes, and retunes each note toward the nearest scale degree
+    (autotune-style) instead of shifting the whole clip by one amount. This is
+    what gives the "locked", produced pitch feel; `humanize` backs off the snap
+    and preserves within-note vibrato, `strength` scales how hard it corrects."""
     try:
         mono = np.mean(audio, axis=1).astype(np.float32, copy=False)
         if mono.size < sample_rate:
             return audio, f"{mode} pitch polish skipped", "Vocal is too short for pitch estimation."
-        max_samples = min(mono.shape[0], sample_rate * 90)
-        analysis_audio = mono[:max_samples]
-        f0, _, _ = librosa.pyin(
-            analysis_audio,
+        mode_factor = {"Natural": 0.5, "Medium": 0.8, "Strong": 1.0}.get(mode, 0.0)
+        if mode_factor <= 0:
+            return audio, f"{mode} pitch polish skipped", None
+        strength_ratio = max(0.0, min(1.0, strength / 100.0))
+        humanize_ratio = max(0.0, min(1.0, humanize / 100.0))
+
+        hop = 512
+        frame_length = 2048
+        f0, _voiced_flag, _voiced_prob = librosa.pyin(
+            mono,
             fmin=librosa.note_to_hz("C2"),
             fmax=librosa.note_to_hz("C6"),
             sr=sample_rate,
-            frame_length=2048,
-            hop_length=512,
+            frame_length=frame_length,
+            hop_length=hop,
         )
-        voiced = f0[np.isfinite(f0)]
-        if voiced.size < 8:
+        midi = librosa.hz_to_midi(f0)
+        voiced = np.isfinite(f0)
+        if int(np.count_nonzero(voiced)) < 8:
             return audio, f"{mode} pitch polish skipped", "Could not find enough voiced vocal frames for pitch polish."
-        median_midi = float(np.median(librosa.hz_to_midi(voiced)))
-        target_midi = _nearest_target_midi(median_midi, key, scale)
-        semitones = target_midi - median_midi
-        strength_ratio = max(0.0, min(1.0, strength / 100.0))
-        humanize_ratio = max(0.0, min(1.0, humanize / 100.0))
-        max_shift = {"Natural": 0.2, "Medium": 0.45, "Strong": 0.8}.get(mode, 0.0)
-        max_shift *= 0.45 + strength_ratio * 1.25
-        semitones = max(-max_shift, min(max_shift, semitones))
-        semitones *= 1.0 - humanize_ratio * 0.55
-        if abs(semitones) < 0.025:
+
+        segments = _note_segments(midi, voiced, hop, mono.shape[0], sample_rate)
+        if not segments:
             return audio, f"{mode} pitch polish checked", None
-        shifted = np.zeros_like(audio)
-        for channel in range(audio.shape[1]):
-            shifted[:, channel] = librosa.effects.pitch_shift(y=audio[:, channel], sr=sample_rate, n_steps=semitones)
-        return shifted.astype(np.float32, copy=False), f"{mode} key-center pitch polish ({semitones:+.2f} st, strength {int(round(strength))}%, humanize {int(round(humanize))}%)", None
+
+        # Correction fraction toward the grid, softened by humanize.
+        correction = strength_ratio * mode_factor * (1.0 - humanize_ratio * 0.4)
+        max_note_shift = 2.0  # cap per-note pull so octave/tracking errors can't fling a note
+        out = audio.astype(np.float32, copy=True)
+        shifts: list[float] = []
+        for start, end, median_midi in segments:
+            if end - start < int(sample_rate * 0.05):
+                continue
+            target = _nearest_target_midi(median_midi, key, scale)
+            semitones = (target - median_midi) * correction
+            semitones = max(-max_note_shift, min(max_note_shift, semitones))
+            if abs(semitones) < 0.03:
+                continue
+            applied = False
+            for channel in range(out.shape[1]):
+                seg = audio[start:end, channel]
+                try:
+                    shifted = librosa.effects.pitch_shift(y=seg, sr=sample_rate, n_steps=float(semitones))
+                except Exception:
+                    continue
+                shifted = _match_length(shifted, seg.shape[0]).astype(np.float32, copy=False)
+                _write_with_edge_fade(out[:, channel], shifted, start, end, sample_rate)
+                applied = True
+            if applied:
+                shifts.append(abs(semitones))
+
+        if not shifts:
+            return audio, f"{mode} pitch polish checked", None
+        avg_shift = float(np.mean(shifts))
+        description = f"{mode} per-note pitch correction ({len(shifts)} notes, avg {avg_shift:.2f} st, strength {int(round(strength))}%, humanize {int(round(humanize))}%)"
+        return _sanitize_audio(out, clip=1.2), description, None
     except Exception as exc:
         return audio, f"{mode} pitch polish skipped", f"Pitch polish unavailable: {str(exc) or 'analysis failed'}."
+
+
+def _note_segments(midi: np.ndarray, voiced: np.ndarray, hop: int, total_samples: int, sample_rate: int) -> list[tuple[int, int, float]]:
+    """Split a per-frame pitch track into note-sized sample ranges: contiguous
+    voiced runs, further split where the rounded semitone changes."""
+    n = len(midi)
+    min_frames = max(3, int(0.06 * sample_rate / hop))
+    raw: list[tuple[int, int]] = []
+    i = 0
+    while i < n:
+        if not voiced[i]:
+            i += 1
+            continue
+        j = i
+        while j < n and voiced[j]:
+            j += 1
+        sub_start = i
+        current = round(float(midi[i]))
+        for k in range(i + 1, j):
+            rounded = round(float(midi[k]))
+            if abs(rounded - current) >= 1:
+                if k - sub_start >= min_frames:
+                    raw.append((sub_start, k))
+                sub_start = k
+                current = rounded
+        if j - sub_start >= min_frames:
+            raw.append((sub_start, j))
+        i = j
+
+    result: list[tuple[int, int, float]] = []
+    for frame_start, frame_end in raw:
+        start = min(total_samples, frame_start * hop)
+        end = min(total_samples, frame_end * hop)
+        if end - start < 1:
+            continue
+        median_midi = float(np.nanmedian(midi[frame_start:frame_end]))
+        if not np.isfinite(median_midi):
+            continue
+        result.append((start, end, median_midi))
+    return result
+
+
+def _write_with_edge_fade(channel_out: np.ndarray, shifted: np.ndarray, start: int, end: int, sample_rate: int) -> None:
+    """Replace channel_out[start:end] with `shifted`, crossfading the first and
+    last few ms back to the existing signal to avoid clicks at note seams."""
+    length = min(end - start, shifted.shape[0])
+    if length <= 0:
+        return
+    end = start + length
+    segment = shifted[:length].copy()
+    original = channel_out[start:end]
+    fade = min(int(sample_rate * 0.008), length // 2)
+    if fade > 0:
+        fade_in = np.linspace(0.0, 1.0, fade, dtype=np.float32)
+        fade_out = np.linspace(1.0, 0.0, fade, dtype=np.float32)
+        segment[:fade] = original[:fade] * (1.0 - fade_in) + segment[:fade] * fade_in
+        segment[-fade:] = original[-fade:] * (1.0 - fade_out) + segment[-fade:] * fade_out
+    channel_out[start:end] = segment
 
 
 def _nearest_target_midi(midi_value: float, key: str, scale: str) -> float:
@@ -1985,6 +2118,13 @@ def _apply_vocal_fx(audio: np.ndarray, sample_rate: int, style: str, amount: flo
         delay = _delay_effect(audio, sample_rate, delay_seconds=0.28, feedback=0.22, amount=0.10 * amount_ratio)
         spread = _apply_width(delay + reverb, 0.26)
         mixed = audio * (1.0 - 0.12 * amount_ratio) + spread
+    elif style == "Suno Space":
+        # Lush produced vocal finish: bright plate + slap + quarter delay, widened.
+        reverb = _simple_reverb(audio, sample_rate, amount=0.22 * amount_ratio, room_size=0.70)
+        slap = _delay_effect(audio, sample_rate, delay_seconds=0.11, feedback=0.12, amount=0.10 * amount_ratio)
+        quarter = _delay_effect(audio, sample_rate, delay_seconds=0.30, feedback=0.20, amount=0.09 * amount_ratio)
+        spread = _apply_width(reverb + slap + quarter, 0.32)
+        mixed = audio * (1.0 - 0.10 * amount_ratio) + spread
     else:
         mixed = audio
     return _peak_limit(mixed, ceiling=0.98)
@@ -2016,7 +2156,13 @@ def _process_vocal_mix_bus(audio: np.ndarray, sample_rate: int, controls: dict, 
         vocal_bus = _compress_audio(vocal_bus, threshold_db=-21.5 + (0.5 - glue) * 4.0, ratio=1.5 + glue * 2.0, mix=0.12 + glue * 0.30, sample_rate=sample_rate)
     delay_amount = _control_ratio(controls, "vocalDelayAmount")
     if delay_amount > 0.01:
-        vocal_bus = vocal_bus + _delay_effect(vocal_bus, sample_rate, delay_seconds=0.285, feedback=0.18 + delay_amount * 0.12, amount=0.02 + delay_amount * 0.055)
+        vocal_bus = vocal_bus + _pingpong_delay(
+            vocal_bus,
+            sample_rate,
+            delay_seconds=0.285,
+            feedback=0.30 + delay_amount * 0.35,
+            amount=0.10 + delay_amount * 0.42,
+        )
     level = float(controls.get("vocalBusLevel", 0))
     if abs(level) > 0.01:
         vocal_bus = _apply_gain(vocal_bus, level)
@@ -2028,23 +2174,25 @@ def _process_vocal_mix_bus(audio: np.ndarray, sample_rate: int, controls: dict, 
 
 
 def _stem_reverb_amount(stem_type: str, reverb_send: float, controls: dict) -> float:
+    # Pre-fader send level into the shared reverb buses. Reverb intensity itself
+    # is applied later via the reverb `amount`, so this must NOT also multiply by
+    # the reverb control or the wet signal collapses to near silence.
     send = max(0.0, min(1.0, reverb_send / 100.0))
-    global_amount = _control_ratio(controls, "reverbAmount")
     vocal_amount = _control_ratio(controls, "vocalReverbAmount")
     type_factor = {
-        "Lead Vocal": 0.42 + vocal_amount * 0.22,
-        "Backing Vocal": 0.62 + vocal_amount * 0.16,
-        "Drums": 0.32,
-        "Kick": 0.04,
-        "Snare": 0.36,
-        "Bass": 0.04,
-        "Electric Guitar": 0.42,
-        "Acoustic Guitar": 0.48,
-        "Keys/Piano": 0.45,
-        "Pads/Strings": 0.72,
-        "FX/Ambience": 0.82,
-    }.get(stem_type, 0.35)
-    return send * global_amount * type_factor
+        "Lead Vocal": 0.70 + vocal_amount * 0.25,
+        "Backing Vocal": 0.85 + vocal_amount * 0.15,
+        "Drums": 0.45,
+        "Kick": 0.05,
+        "Snare": 0.50,
+        "Bass": 0.05,
+        "Electric Guitar": 0.55,
+        "Acoustic Guitar": 0.60,
+        "Keys/Piano": 0.60,
+        "Pads/Strings": 0.85,
+        "FX/Ambience": 0.95,
+    }.get(stem_type, 0.45)
+    return send * type_factor
 
 
 def _stem_delay_amount(stem_type: str, delay_send: float, controls: dict) -> float:
@@ -2066,23 +2214,81 @@ def _stem_delay_amount(stem_type: str, delay_send: float, controls: dict) -> flo
     return send * global_amount * type_factor
 
 
+def _feedback_comb(audio: np.ndarray, delay: int, gain: float) -> np.ndarray:
+    """Feedback comb filter y[n] = x[n] + g*y[n-delay], built with a doubling
+    trick so a full exponential tail is produced in ~log2 vectorised passes
+    instead of a per-sample Python loop."""
+    length = audio.shape[0]
+    if delay < 1 or delay >= length:
+        return audio.astype(np.float32, copy=True)
+    out = audio.astype(np.float32, copy=True)
+    step = delay
+    g = max(0.0, min(0.97, gain))
+    while g > 0.02 and step < length:
+        out[step:] += g * out[:-step]
+        g = g * g
+        step *= 2
+    return out
+
+
+def _diffuse_reverb(audio: np.ndarray, sample_rate: int, room_size: float, decay: float, damping_hz: float, predelay_ms: float) -> np.ndarray:
+    """Dense, sustained stereo reverb tail (parallel feedback combs at mutually
+    prime delays, low-frequency damping, pre-delay and stereo decorrelation).
+    Returns a wet signal whose RMS is matched to the input so callers can treat
+    the returned `amount` as a true wet gain."""
+    if audio.size == 0:
+        return np.zeros_like(audio)
+    work = audio if audio.ndim == 2 else audio.reshape(-1, 1)
+    length = work.shape[0]
+    channels = work.shape[1]
+
+    predelay = max(0, int(sample_rate * predelay_ms / 1000.0))
+    if 0 < predelay < length:
+        source = np.zeros_like(work)
+        source[predelay:] = work[: length - predelay]
+    else:
+        source = work
+
+    # Comb delays in ms, spread out and scaled by room size for a bigger space.
+    base_ms = np.array([29.7, 34.1, 37.1, 41.1, 43.7, 47.3])
+    scale = 0.7 + room_size * 0.9
+    reverbed = np.zeros_like(work)
+    for index, delay_ms in enumerate(base_ms):
+        delay = max(1, int(sample_rate * (delay_ms * scale) / 1000.0))
+        # Slightly decorrelate the two channels for stereo width.
+        offset = int(sample_rate * (0.0 if channels < 2 else 0.0007 * (index % 2)))
+        for channel in range(channels):
+            chan_delay = delay + (offset if channel == 1 else 0)
+            reverbed[:, channel] += _feedback_comb(source[:, channel], chan_delay, decay)
+
+    reverbed /= float(len(base_ms))
+    try:
+        reverbed = _low_pass(reverbed, sample_rate, max(1200.0, damping_hz))
+    except Exception:
+        pass
+
+    # Match the wet RMS to the input so `amount` behaves as a wet/dry gain
+    # regardless of how quiet the send feeding it is.
+    in_rms = float(np.sqrt(np.mean(np.square(work, dtype=np.float64)))) if work.size else 0.0
+    wet_rms = float(np.sqrt(np.mean(np.square(reverbed, dtype=np.float64)))) if reverbed.size else 0.0
+    if wet_rms > 1e-6 and in_rms > 1e-6:
+        reverbed *= in_rms / wet_rms
+
+    if reverbed.shape[1] != audio.ndim and audio.ndim == 1:
+        reverbed = reverbed.reshape(-1)
+    return reverbed.astype(np.float32, copy=False)
+
+
 def _simple_reverb(audio: np.ndarray, sample_rate: int, amount: float, room_size: float) -> np.ndarray:
-    amount = max(0.0, min(0.8, amount))
+    amount = max(0.0, min(1.1, amount))
     if amount <= 0 or audio.size == 0:
         return np.zeros_like(audio)
     room_size = max(0.1, min(1.2, room_size))
-    reverbed = np.zeros_like(audio)
-    taps = [(0.023, 0.42), (0.037, 0.34), (0.053, 0.28), (0.071, 0.22), (0.097, 0.16)]
-    for seconds, gain in taps:
-        delay = max(1, int(sample_rate * seconds * (0.65 + room_size)))
-        if delay >= audio.shape[0]:
-            continue
-        reverbed[delay:] += audio[:-delay] * gain
-    try:
-        reverbed = _low_pass(reverbed, sample_rate, 7800 - min(3600, room_size * 2200))
-    except Exception:
-        pass
-    return np.clip(reverbed * amount, -0.8, 0.8).astype(np.float32, copy=False)
+    decay = 0.76 + min(1.0, room_size) * 0.16
+    damping_hz = 8200.0 - min(3200.0, room_size * 2600.0)
+    predelay_ms = 12.0 + room_size * 22.0
+    wet = _diffuse_reverb(audio, sample_rate, room_size, decay, damping_hz, predelay_ms)
+    return np.clip(wet * amount, -0.95, 0.95).astype(np.float32, copy=False)
 
 
 def _delay_effect(audio: np.ndarray, sample_rate: int, delay_seconds: float, feedback: float, amount: float) -> np.ndarray:
@@ -2096,6 +2302,39 @@ def _delay_effect(audio: np.ndarray, sample_rate: int, delay_seconds: float, fee
     if second_delay < audio.shape[0]:
         delayed[second_delay:] += audio[:-second_delay] * max(0.0, min(0.8, feedback))
     return np.clip(delayed * amount, -0.7, 0.7).astype(np.float32, copy=False)
+
+
+def _pingpong_delay(audio: np.ndarray, sample_rate: int, delay_seconds: float, feedback: float, amount: float, taps: int = 5, hp_hz: float = 320.0) -> np.ndarray:
+    """Stereo ping-pong delay: successive echoes alternate hard left/right and
+    decay by `feedback`. High-passed so it adds width and depth without
+    muddying the low end. Returns a wet-only signal."""
+    amount = max(0.0, min(0.6, amount))
+    if amount <= 0 or audio.size == 0:
+        return np.zeros_like(audio)
+    work = audio if audio.ndim == 2 else audio.reshape(-1, 1)
+    length = work.shape[0]
+    mono = np.mean(work, axis=1)
+    out = np.zeros((length, 2), dtype=np.float32)
+    delay = max(1, int(sample_rate * delay_seconds))
+    g = max(0.0, min(0.85, feedback))
+    level = 1.0
+    for tap in range(1, taps + 1):
+        offset = delay * tap
+        if offset >= length:
+            break
+        level *= g
+        channel = (tap - 1) % 2
+        out[offset:, channel] += mono[: length - offset] * level
+    try:
+        out = _high_pass(out, sample_rate, hp_hz)
+    except Exception:
+        pass
+    result = np.clip(out * amount, -0.7, 0.7).astype(np.float32, copy=False)
+    if audio.ndim == 2 and audio.shape[1] == 2:
+        return result
+    if audio.ndim == 2:  # single-channel 2D input
+        return result[:, :1]
+    return np.mean(result, axis=1).astype(np.float32, copy=False)
 
 
 def _apply_vocal_ducking(audio: np.ndarray, vocal_bus: np.ndarray, sample_rate: int, amount_db: float) -> np.ndarray:

@@ -8,6 +8,8 @@ import {
   FolderKanban,
   FolderOpen,
   FolderPlus,
+  LayoutGrid,
+  List,
   Music2,
   RefreshCw,
   Search,
@@ -27,6 +29,7 @@ import CreateProjectModal from "../components/CreateProjectModal.jsx";
 import EmptyState from "../components/EmptyState.jsx";
 import ProcessingPanel from "../components/ProcessingPanel.jsx";
 import ProjectCard from "../components/ProjectCard.jsx";
+import ProjectRow from "../components/ProjectRow.jsx";
 import StatusBadge from "../components/StatusBadge.jsx";
 import { formatDateTime } from "../utils/format.js";
 import {
@@ -72,7 +75,15 @@ export default function Dashboard() {
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState("all");
   const [sortMode, setSortMode] = useState("recent");
+  const [view, setView] = useState(() => {
+    if (typeof window === "undefined") return "list";
+    return window.localStorage.getItem("dashboardProjectView") === "grid" ? "grid" : "list";
+  });
   const navigate = useNavigate();
+
+  useEffect(() => {
+    if (typeof window !== "undefined") window.localStorage.setItem("dashboardProjectView", view);
+  }, [view]);
 
   const loadProjects = async () => {
     setLoading(true);
@@ -206,7 +217,7 @@ export default function Dashboard() {
             </p>
           </div>
 
-          <div className="grid gap-2 sm:grid-cols-[minmax(220px,1fr)_auto_auto]">
+          <div className="grid gap-2 sm:grid-cols-[minmax(200px,1fr)_auto_auto_auto]">
             <label className="relative block">
               <Search size={16} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500" />
               <input
@@ -247,21 +258,42 @@ export default function Dashboard() {
                 ))}
               </select>
             </label>
+
+            <div className="flex min-h-10 items-center rounded-lg border border-white/10 bg-black/25 p-1" role="group" aria-label="Project view">
+              <ViewToggleButton active={view === "list"} onClick={() => setView("list")} label="List view" icon={List} />
+              <ViewToggleButton active={view === "grid"} onClick={() => setView("grid")} label="Grid view" icon={LayoutGrid} />
+            </div>
           </div>
         </div>
 
         {loading ? (
-          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-            {[0, 1, 2].map((item) => (
-              <div key={item} className="h-56 animate-pulse rounded-lg border border-white/10 bg-white/[0.04]" />
-            ))}
-          </div>
+          view === "grid" ? (
+            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+              {[0, 1, 2].map((item) => (
+                <div key={item} className="h-56 animate-pulse rounded-lg border border-white/10 bg-white/[0.04]" />
+              ))}
+            </div>
+          ) : (
+            <div className="space-y-2.5">
+              {[0, 1, 2, 3].map((item) => (
+                <div key={item} className="h-20 animate-pulse rounded-lg border border-white/10 bg-white/[0.04]" />
+              ))}
+            </div>
+          )
         ) : filteredProjects.length ? (
-          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-            {filteredProjects.map((project) => (
-              <ProjectCard key={project.id} project={project} onDelete={handleDeleteProject} deleting={deletingProjectId === project.id} />
-            ))}
-          </div>
+          view === "grid" ? (
+            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+              {filteredProjects.map((project) => (
+                <ProjectCard key={project.id} project={project} onDelete={handleDeleteProject} deleting={deletingProjectId === project.id} />
+              ))}
+            </div>
+          ) : (
+            <div className="space-y-2.5">
+              {filteredProjects.map((project) => (
+                <ProjectRow key={project.id} project={project} onDelete={handleDeleteProject} deleting={deletingProjectId === project.id} />
+              ))}
+            </div>
+          )
         ) : projects.length ? (
           <EmptyState
             icon={Search}
@@ -385,6 +417,21 @@ function EngineStatusPanel({ health, loading }) {
         </div>
       </div>
     </section>
+  );
+}
+
+function ViewToggleButton({ active, onClick, label, icon: Icon }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={active}
+      title={label}
+      aria-label={label}
+      className={`grid h-8 w-9 place-items-center rounded-md transition ${active ? "bg-teal-300/20 text-teal-50 shadow-[0_0_14px_rgba(45,212,191,0.12)]" : "text-zinc-400 hover:bg-white/[0.06] hover:text-zinc-200"}`}
+    >
+      <Icon size={16} />
+    </button>
   );
 }
 

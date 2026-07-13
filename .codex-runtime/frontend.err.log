@@ -1,0 +1,105 @@
+[2m10:04:34 AM[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/projects/9a5cbdabb4824db196cd1f3b898f9f55[39m
+Error: connect ECONNREFUSED 127.0.0.1:8000
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1705:16)
+[2m10:04:37 AM[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/projects/9a5cbdabb4824db196cd1f3b898f9f55/jobs/9b3f1936ea104d68833bb912d5bc7bd5[39m
+Error: connect ECONNREFUSED 127.0.0.1:8000
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1705:16)
+[2m10:04:37 AM[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/projects/9a5cbdabb4824db196cd1f3b898f9f55/jobs/9b3f1936ea104d68833bb912d5bc7bd5[39m
+Error: connect ECONNREFUSED 127.0.0.1:8000
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1705:16)
+[2m10:04:37 AM[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/projects/9a5cbdabb4824db196cd1f3b898f9f55/jobs/9b3f1936ea104d68833bb912d5bc7bd5[39m
+Error: connect ECONNREFUSED 127.0.0.1:8000
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1705:16)
+[2m10:04:37 AM[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/projects/9a5cbdabb4824db196cd1f3b898f9f55/jobs/9b3f1936ea104d68833bb912d5bc7bd5[39m
+Error: connect ECONNREFUSED 127.0.0.1:8000
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1705:16)
+[2m10:04:37 AM[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/projects/9a5cbdabb4824db196cd1f3b898f9f55/jobs/9b3f1936ea104d68833bb912d5bc7bd5[39m
+Error: connect ECONNREFUSED 127.0.0.1:8000
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1705:16)
+[2m10:04:37 AM[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/projects/9a5cbdabb4824db196cd1f3b898f9f55/jobs/9b3f1936ea104d68833bb912d5bc7bd5[39m
+Error: connect ECONNREFUSED 127.0.0.1:8000
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1705:16)
+[2m10:04:38 AM[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/projects/9a5cbdabb4824db196cd1f3b898f9f55/jobs/9b3f1936ea104d68833bb912d5bc7bd5[39m
+Error: connect ECONNREFUSED 127.0.0.1:8000
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1705:16)
+[2m10:04:38 AM[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/projects/9a5cbdabb4824db196cd1f3b898f9f55/jobs/9b3f1936ea104d68833bb912d5bc7bd5[39m
+Error: connect ECONNREFUSED 127.0.0.1:8000
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1705:16)
+[2m10:04:39 AM[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/projects/9a5cbdabb4824db196cd1f3b898f9f55/jobs/9b3f1936ea104d68833bb912d5bc7bd5[39m
+Error: connect ECONNREFUSED 127.0.0.1:8000
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1705:16)
+[2m10:04:39 AM[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/projects/9a5cbdabb4824db196cd1f3b898f9f55/jobs/9b3f1936ea104d68833bb912d5bc7bd5[39m
+Error: connect ECONNREFUSED 127.0.0.1:8000
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1705:16)
+[2m10:04:39 AM[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/projects/9a5cbdabb4824db196cd1f3b898f9f55/jobs/9b3f1936ea104d68833bb912d5bc7bd5[39m
+Error: connect ECONNREFUSED 127.0.0.1:8000
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1705:16)
+[2m10:04:39 AM[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/projects/9a5cbdabb4824db196cd1f3b898f9f55[39m
+Error: connect ECONNREFUSED 127.0.0.1:8000
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1705:16)
+[2m10:04:39 AM[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/projects/9a5cbdabb4824db196cd1f3b898f9f55/jobs/9b3f1936ea104d68833bb912d5bc7bd5[39m
+Error: connect ECONNREFUSED 127.0.0.1:8000
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1705:16)
+[2m10:04:39 AM[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/projects/9a5cbdabb4824db196cd1f3b898f9f55/jobs/9b3f1936ea104d68833bb912d5bc7bd5[39m
+Error: connect ECONNREFUSED 127.0.0.1:8000
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1705:16)
+[2m10:04:39 AM[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/projects/9a5cbdabb4824db196cd1f3b898f9f55/jobs/9b3f1936ea104d68833bb912d5bc7bd5[39m
+Error: connect ECONNREFUSED 127.0.0.1:8000
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1705:16)
+[2m10:08:11 AM[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/projects/9a5cbdabb4824db196cd1f3b898f9f55/jobs/9b3f1936ea104d68833bb912d5bc7bd5[39m
+Error: connect ECONNREFUSED 127.0.0.1:8000
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1705:16)
+[2m10:08:11 AM[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/projects/9a5cbdabb4824db196cd1f3b898f9f55/jobs/9b3f1936ea104d68833bb912d5bc7bd5[39m
+Error: connect ECONNREFUSED 127.0.0.1:8000
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1705:16)
+[2m10:08:11 AM[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/projects/9a5cbdabb4824db196cd1f3b898f9f55/jobs/9b3f1936ea104d68833bb912d5bc7bd5[39m
+Error: connect ECONNREFUSED 127.0.0.1:8000
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1705:16)
+[2m10:08:11 AM[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/projects/9a5cbdabb4824db196cd1f3b898f9f55/jobs/9b3f1936ea104d68833bb912d5bc7bd5[39m
+Error: connect ECONNREFUSED 127.0.0.1:8000
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1705:16)
+[2m10:08:11 AM[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/projects/9a5cbdabb4824db196cd1f3b898f9f55/jobs/9b3f1936ea104d68833bb912d5bc7bd5[39m
+Error: connect ECONNREFUSED 127.0.0.1:8000
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1705:16)
+[2m10:08:11 AM[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/projects/9a5cbdabb4824db196cd1f3b898f9f55/jobs/9b3f1936ea104d68833bb912d5bc7bd5[39m
+Error: connect ECONNREFUSED 127.0.0.1:8000
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1705:16)
+[2m10:08:11 AM[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/projects/9a5cbdabb4824db196cd1f3b898f9f55/jobs/9b3f1936ea104d68833bb912d5bc7bd5[39m
+Error: connect ECONNREFUSED 127.0.0.1:8000
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1705:16)
+[2m10:08:11 AM[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/projects/9a5cbdabb4824db196cd1f3b898f9f55/jobs/9b3f1936ea104d68833bb912d5bc7bd5[39m
+Error: connect ECONNREFUSED 127.0.0.1:8000
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1705:16)
+[2m10:08:11 AM[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/projects/9a5cbdabb4824db196cd1f3b898f9f55/jobs/9b3f1936ea104d68833bb912d5bc7bd5[39m
+Error: connect ECONNREFUSED 127.0.0.1:8000
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1705:16)
+[2m10:08:11 AM[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/projects/9a5cbdabb4824db196cd1f3b898f9f55/jobs/9b3f1936ea104d68833bb912d5bc7bd5[39m
+Error: connect ECONNREFUSED 127.0.0.1:8000
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1705:16)
+[2m10:11:50 AM[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/projects/9a5cbdabb4824db196cd1f3b898f9f55[39m
+Error: connect ECONNREFUSED 127.0.0.1:8000
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1705:16)
+[2m10:11:51 AM[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/projects/9a5cbdabb4824db196cd1f3b898f9f55[39m
+Error: connect ECONNREFUSED 127.0.0.1:8000
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1705:16)
+[2m10:11:52 AM[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/projects/9a5cbdabb4824db196cd1f3b898f9f55[39m
+Error: connect ECONNREFUSED 127.0.0.1:8000
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1705:16)
+[2m10:11:52 AM[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/projects/9a5cbdabb4824db196cd1f3b898f9f55[39m
+Error: connect ECONNREFUSED 127.0.0.1:8000
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1705:16)
+[2m10:11:55 AM[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/projects/9a5cbdabb4824db196cd1f3b898f9f55[39m
+Error: connect ECONNREFUSED 127.0.0.1:8000
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1705:16)
+[2m10:11:59 AM[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/projects/9a5cbdabb4824db196cd1f3b898f9f55[39m
+Error: connect ECONNREFUSED 127.0.0.1:8000
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1705:16)
+[2m10:12:03 AM[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/projects/9a5cbdabb4824db196cd1f3b898f9f55[39m
+Error: connect ECONNREFUSED 127.0.0.1:8000
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1705:16)
+[2m10:12:12 AM[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/projects/9a5cbdabb4824db196cd1f3b898f9f55[39m
+Error: connect ECONNREFUSED 127.0.0.1:8000
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1705:16)
+[2m10:12:20 AM[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/projects/9a5cbdabb4824db196cd1f3b898f9f55[39m
+Error: connect ECONNREFUSED 127.0.0.1:8000
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1705:16)

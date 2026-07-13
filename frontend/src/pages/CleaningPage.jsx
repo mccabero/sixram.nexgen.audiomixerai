@@ -5,8 +5,8 @@ import { cancelProcessingJob, deleteCleanedStems, getProcessingJob, getProject, 
 import Button from "../components/Button.jsx";
 import EmptyState from "../components/EmptyState.jsx";
 import ProcessingPanel from "../components/ProcessingPanel.jsx";
+import SourceABPreview from "../components/SourceABPreview.jsx";
 import StatusBadge from "../components/StatusBadge.jsx";
-import WaveformPreview from "../components/WaveformPreview.jsx";
 import { CLEANING_MODES, HUM_FREQUENCIES } from "../constants.js";
 import { formatDb, formatLufs, formatPercent } from "../utils/format.js";
 
@@ -636,8 +636,7 @@ function CleaningRow({ stem, busy, onChange, onClean, onRevert, running, suggest
       </div>
       <div className="space-y-3">
         <p className="text-xs font-semibold uppercase tracking-[0.12em] text-zinc-500 xl:hidden">Preview</p>
-        <PreviewPlayer label="Original" src={originalUrl} variant="amber" />
-        <PreviewPlayer label="Cleaned" src={cleanedUrl} disabled={!cleanedReady} variant="teal" />
+        <SourceABPreview originalUrl={originalUrl} cleanedUrl={cleanedUrl} cleanedReady={cleanedReady} />
       </div>
       <div className="min-w-0 space-y-3">
         <p className="text-xs font-semibold uppercase tracking-[0.12em] text-zinc-500 xl:hidden">Results</p>
@@ -645,18 +644,6 @@ function CleaningRow({ stem, busy, onChange, onClean, onRevert, running, suggest
         <p className="truncate text-sm text-zinc-300">{result.cleanedFilePath || "--"}</p>
         {result.operations?.length ? <OperationList title="Operations" items={result.operations} /> : null}
         {result.warnings?.length ? <OperationList title="Warnings" items={result.warnings} tone="warning" /> : null}
-      </div>
-    </div>
-  );
-}
-
-function PreviewPlayer({ label, src, disabled, variant }) {
-  return (
-    <div>
-      <p className="mb-1 text-xs font-semibold uppercase tracking-[0.12em] text-zinc-500">{label}</p>
-      <div className="space-y-2">
-        <WaveformPreview src={src} disabled={disabled || !src} variant={variant} />
-        {src && !disabled ? <audio src={src} controls className="h-9 w-full" /> : null}
       </div>
     </div>
   );

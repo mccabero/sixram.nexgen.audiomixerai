@@ -89,7 +89,7 @@ def get_vocal_enhancer_presets() -> dict[str, list[str]]:
     return {
         "presets": VOCAL_ENHANCER_PRESETS,
         "pitchCorrectionModes": ["Off", "Natural", "Medium", "Strong"],
-        "fxStyles": ["Dry", "Natural Plate", "Small Hall", "Slap Delay", "Quarter Delay", "Worship Wide"],
+        "fxStyles": ["Dry", "Natural Plate", "Small Hall", "Slap Delay", "Quarter Delay", "Worship Wide", "Suno Space"],
         "keys": ["Auto", "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"],
         "scales": ["Major", "Minor", "Chromatic"],
     }

@@ -170,7 +170,7 @@ VOCAL_ENHANCER_PRESETS = [
     "Backing Vocal Wide",
 ]
 PITCH_CORRECTION_MODES = ["Off", "Natural", "Medium", "Strong"]
-VOCAL_FX_STYLES = ["Dry", "Natural Plate", "Small Hall", "Slap Delay", "Quarter Delay", "Worship Wide"]
+VOCAL_FX_STYLES = ["Dry", "Natural Plate", "Small Hall", "Slap Delay", "Quarter Delay", "Worship Wide", "Suno Space"]
 MUSIC_KEYS = ["Auto", "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
 MUSIC_SCALES = ["Major", "Minor", "Chromatic"]
 
@@ -283,7 +283,7 @@ class StemCleaningResult(BaseModel):
 
 class StemVocalEnhancementSettings(BaseModel):
     enabled: bool = False
-    preset: str = "AI Pop Clean"
+    preset: str = "Suno-Style Lead"
     pitchCorrection: str = "Off"
     key: str = "Auto"
     scale: str = "Major"
@@ -383,6 +383,7 @@ class Stem(BaseModel):
     originalFilename: str
     storedFilename: str
     filePath: str
+    originalFileUrl: str | None = None
     fileExtension: str
     fileSize: int
     uploadedAt: str

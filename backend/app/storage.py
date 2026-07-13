@@ -808,7 +808,19 @@ def _ensure_project_defaults(project: dict[str, Any]) -> None:
     project["detectionSummary"].setdefault("confidentPendingCount", 0)
     project["detectionSummary"].setdefault("acceptedCount", 0)
 
+    migrate_vocal_preset = not project.get("vocalPresetDefaultMigrated")
+    if migrate_vocal_preset:
+        project["vocalPresetDefaultMigrated"] = True
+
     for stem in project.get("stems", []):
+        file_path = stem.get("filePath")
+        if file_path:
+            normalized = file_path.replace("\\", "/")
+            if normalized.startswith("storage/"):
+                normalized = normalized[len("storage/") :]
+            stem["originalFileUrl"] = f"/media/{normalized}"
+        else:
+            stem.setdefault("originalFileUrl", None)
         stem.setdefault("analysisStatus", "Pending")
         stem.setdefault("analysisResult", None)
         if stem.get("analysisResult") is not None:
@@ -836,7 +848,7 @@ def _ensure_project_defaults(project: dict[str, Any]) -> None:
             "vocalEnhancementSettings",
             {
                 "enabled": False,
-                "preset": "AI Pop Clean",
+                "preset": "Suno-Style Lead",
                 "pitchCorrection": "Off",
                 "key": "Auto",
                 "scale": "Major",
@@ -856,7 +868,14 @@ def _ensure_project_defaults(project: dict[str, Any]) -> None:
             },
         )
         stem["vocalEnhancementSettings"].setdefault("enabled", False)
-        stem["vocalEnhancementSettings"].setdefault("preset", "AI Pop Clean")
+        stem["vocalEnhancementSettings"].setdefault("preset", "Suno-Style Lead")
+        # One-time upgrade of untouched auto-defaults to the new default preset.
+        # Only affects stems still on the old default that were never enhanced or
+        # enabled, so a preset the user actually chose is never overwritten.
+        if migrate_vocal_preset:
+            ve_settings = stem["vocalEnhancementSettings"]
+            if ve_settings.get("preset") == "AI Pop Clean" and stem.get("vocalEnhancementResult") is None and not ve_settings.get("enabled"):
+                ve_settings["preset"] = "Suno-Style Lead"
         stem["vocalEnhancementSettings"].setdefault("pitchCorrection", "Off")
         stem["vocalEnhancementSettings"].setdefault("key", "Auto")
         stem["vocalEnhancementSettings"].setdefault("scale", "Major")

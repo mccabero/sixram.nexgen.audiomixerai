@@ -1,5 +1,5 @@
-import { Activity, ArrowLeft, BarChart3, ChevronDown, Eraser, Gauge, RefreshCw, Search, Settings2, SlidersHorizontal, Trash2, TriangleAlert, WandSparkles, Zap } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { Activity, ArrowLeft, BarChart3, ChevronDown, Eraser, Gauge, Pause, Play, RefreshCw, Search, Settings2, SlidersHorizontal, Trash2, TriangleAlert, WandSparkles, Zap } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { acceptAllStemDetections, acceptStemDetection, cancelProcessingJob, clearDetectionMemory, deleteAnalysisResults, deleteAutoBalance, deleteStemDetections, detectStemTypes, generateAutoBalance, getProcessingJob, getProject, startAnalysis, updateStemType } from "../api.js";
 import Button from "../components/Button.jsx";
@@ -24,6 +24,9 @@ export default function AnalyzePage() {
   const [error, setError] = useState("");
   const [balanceNotice, setBalanceNotice] = useState("");
   const [showMoreTools, setShowMoreTools] = useState(true);
+  const [sortMode, setSortMode] = useState("upload");
+  const [filterMode, setFilterMode] = useState("all");
+  const [playingStemId, setPlayingStemId] = useState("");
 
   const stems = project?.stems || [];
   const analysisComplete = stems.length > 0 && stems.every((stem) => stem.analysisStatus === "Completed");
@@ -40,6 +43,22 @@ export default function AnalyzePage() {
     const jobs = project?.processingJobs?.filter((item) => item.type === "Analysis") || [];
     return jobs.length ? jobs[jobs.length - 1] : null;
   }, [project]);
+
+  const attentionStems = useMemo(() => stems.map((stem) => ({ stem, issues: getStemIssues(stem) })).filter((item) => item.issues.length), [stems]);
+
+  const displayedStems = useMemo(() => {
+    const decorated = stems.map((stem, index) => ({ stem, index, issues: getStemIssues(stem) }));
+    const filtered = filterMode === "attention" ? decorated.filter((item) => item.issues.length) : decorated;
+    const sorted = [...filtered].sort((a, b) => {
+      if (sortMode === "loudest") return (b.stem.analysisResult?.integratedLufs ?? -Infinity) - (a.stem.analysisResult?.integratedLufs ?? -Infinity);
+      if (sortMode === "quietest") return (a.stem.analysisResult?.integratedLufs ?? Infinity) - (b.stem.analysisResult?.integratedLufs ?? Infinity);
+      if (sortMode === "warnings") return b.issues.length - a.issues.length || a.index - b.index;
+      return a.index - b.index;
+    });
+    return sorted.map((item) => item.stem);
+  }, [stems, sortMode, filterMode]);
+
+  const togglePreview = (stemId) => setPlayingStemId((current) => (current === stemId ? "" : stemId));
 
   const loadProject = async () => {
     setError("");
@@ -399,6 +418,8 @@ export default function AnalyzePage() {
 
       <AnalysisOverview stems={stems} />
 
+      {attentionStems.length ? <NeedsAttentionPanel items={attentionStems} playingStemId={playingStemId} onTogglePlay={togglePreview} /> : null}
+
       {job ? (
         <section className="mt-6 rounded-lg border border-white/10 bg-white/[0.035] p-4">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -428,7 +449,39 @@ export default function AnalyzePage() {
 
       <section className="mt-6">
         {stems.length ? (
-          <AnalysisTable stems={stems} onChangeType={handleChangeType} onAcceptDetection={handleAcceptDetection} busyStemId={busyStemId} />
+          <>
+            <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+              <div>
+                <h2 className="text-xl font-semibold text-white">Stem Metrics</h2>
+                <p className="mt-1 text-sm text-zinc-400">
+                  {displayedStems.length === stems.length ? "All stems, with levels and detected types." : `${displayedStems.length} of ${stems.length} stems shown.`}
+                </p>
+              </div>
+              <div className="grid gap-2 sm:grid-cols-2">
+                <label className="block">
+                  <span className="sr-only">Filter stems</span>
+                  <select value={filterMode} onChange={(event) => setFilterMode(event.target.value)} className="min-h-10 w-full rounded-lg border border-white/10 bg-black/25 px-3 py-2 text-sm text-white">
+                    <option value="all">All stems</option>
+                    <option value="attention">Needs attention</option>
+                  </select>
+                </label>
+                <label className="block">
+                  <span className="sr-only">Sort stems</span>
+                  <select value={sortMode} onChange={(event) => setSortMode(event.target.value)} className="min-h-10 w-full rounded-lg border border-white/10 bg-black/25 px-3 py-2 text-sm text-white">
+                    <option value="upload">Upload order</option>
+                    <option value="loudest">Loudest first</option>
+                    <option value="quietest">Quietest first</option>
+                    <option value="warnings">Most warnings</option>
+                  </select>
+                </label>
+              </div>
+            </div>
+            {displayedStems.length ? (
+              <AnalysisTable stems={displayedStems} onChangeType={handleChangeType} onAcceptDetection={handleAcceptDetection} busyStemId={busyStemId} playingStemId={playingStemId} onTogglePlay={togglePreview} />
+            ) : (
+              <EmptyState icon={Search} title="No stems need attention" description="Every analyzed stem looks clean. Switch the filter back to All stems to see the full list." action={<Button type="button" variant="secondary" onClick={() => setFilterMode("all")}>Show all stems</Button>} />
+            )}
+          </>
         ) : (
           <EmptyState
             icon={BarChart3}
@@ -513,9 +566,31 @@ function OverviewCard({ icon: Icon, label, value, detail, tone }) {
   );
 }
 
-function AnalysisTable({ stems, onChangeType, onAcceptDetection, busyStemId }) {
+function AnalysisTable({ stems, onChangeType, onAcceptDetection, busyStemId, playingStemId, onTogglePlay }) {
+  const audioRef = useRef(null);
+
+  useEffect(() => {
+    const el = audioRef.current;
+    if (!el) return;
+    if (!playingStemId) {
+      el.pause();
+      return;
+    }
+    const stem = stems.find((item) => item.id === playingStemId);
+    if (!stem?.originalFileUrl) {
+      onTogglePlay("");
+      return;
+    }
+    if (el.dataset.stemId !== playingStemId) {
+      el.src = stem.originalFileUrl;
+      el.dataset.stemId = playingStemId;
+    }
+    el.play().catch(() => onTogglePlay(""));
+  }, [playingStemId, stems, onTogglePlay]);
+
   return (
     <div className="rounded-lg border border-white/10 bg-white/[0.035]">
+      <audio ref={audioRef} preload="none" onEnded={() => onTogglePlay("")} />
       <div className="overflow-x-auto">
         <div className="xl:min-w-[1480px]">
           <div className={`hidden ${analysisGridColumns} gap-3 border-b border-white/10 px-4 py-3 text-xs font-semibold uppercase tracking-[0.14em] text-zinc-500 xl:grid`}>
@@ -539,7 +614,19 @@ function AnalysisTable({ stems, onChangeType, onAcceptDetection, busyStemId }) {
               return (
                 <div key={stem.id} className={`grid gap-4 px-4 py-4 xl:items-center xl:gap-3 ${analysisGridColumns}`}>
                   <div className="min-w-0">
-                    <p className="truncate font-medium text-white">{stem.originalFilename}</p>
+                    <div className="flex min-w-0 items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => onTogglePlay(stem.id)}
+                        disabled={!stem.originalFileUrl}
+                        className="grid h-8 w-8 shrink-0 place-items-center rounded-lg border border-teal-200/30 bg-teal-300/10 text-teal-50 transition hover:bg-teal-300/20 disabled:cursor-not-allowed disabled:opacity-40"
+                        aria-label={playingStemId === stem.id ? `Pause ${stem.originalFilename}` : `Preview ${stem.originalFilename}`}
+                        title={stem.originalFileUrl ? "Preview stem" : "Preview unavailable"}
+                      >
+                        {playingStemId === stem.id ? <Pause size={14} /> : <Play size={14} />}
+                      </button>
+                      <p className="truncate font-medium text-white">{stem.originalFilename}</p>
+                    </div>
                     <div className="mt-2 flex flex-wrap gap-2">
                       {(result.warnings || []).slice(0, 3).map((warning) => (
                         <WarningBadge key={warning} label={shortWarning(warning)} title={warning} />
@@ -589,12 +676,12 @@ function AnalysisTable({ stems, onChangeType, onAcceptDetection, busyStemId }) {
                     )}
                   </div>
                   <Metric label="Duration" value={formatDuration(result.durationSeconds)} />
-                  <Metric label="LUFS" value={formatLufs(result.integratedLufs)} />
-                  <Metric label="Peak" value={formatDb(result.peakDbfs)} />
+                  <MiniMeter label="LUFS" value={result.integratedLufs} min={-40} max={-6} danger={Number.isFinite(result.integratedLufs) && result.integratedLufs > -8} display={formatLufs(result.integratedLufs)} />
+                  <MiniMeter label="Peak" value={result.peakDbfs} min={-48} max={0} danger={Number.isFinite(result.peakDbfs) && result.peakDbfs > -1} display={formatDb(result.peakDbfs)} />
                   <Metric label="True Peak" value={formatDb(result.truePeakDbfs)} />
                   <Metric label="RMS" value={formatDb(result.rmsDbfs)} />
-                  <Metric label="Noise" value={formatDb(result.noiseFloorDbfs)} />
-                  <Metric label="Silence" value={formatPercent(result.silencePercentage)} />
+                  <MiniMeter label="Noise" value={result.noiseFloorDbfs} min={-90} max={-30} danger={Number.isFinite(result.noiseFloorDbfs) && result.noiseFloorDbfs > -45} display={formatDb(result.noiseFloorDbfs)} />
+                  <MiniMeter label="Silence" value={result.silencePercentage} min={0} max={100} danger={Number.isFinite(result.silencePercentage) && result.silencePercentage > 60} display={formatPercent(result.silencePercentage)} />
                   <StatusBadge status={stem.analysisStatus || "Pending"} />
                 </div>
               );
@@ -612,6 +699,75 @@ function Metric({ label, value }) {
       <span className="mr-2 text-xs uppercase tracking-[0.12em] text-zinc-500 xl:hidden">{label}</span>
       {value}
     </span>
+  );
+}
+
+function MiniMeter({ label, value, min, max, danger, display }) {
+  const percent = Number.isFinite(value) ? Math.min(100, Math.max(0, ((value - min) / (max - min)) * 100)) : 0;
+  const fill = danger ? "from-amber-300 to-rose-300" : "from-teal-300 to-emerald-200";
+  return (
+    <div className="min-w-0">
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-xs uppercase tracking-[0.12em] text-zinc-500 xl:hidden">{label}</span>
+        <span className={`text-sm ${danger ? "font-semibold text-amber-100" : "text-zinc-300"}`}>{display}</span>
+      </div>
+      <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-white/10">
+        <div className={`h-full rounded-full bg-gradient-to-r ${fill}`} style={{ width: `${percent}%` }} />
+      </div>
+    </div>
+  );
+}
+
+function getStemIssues(stem) {
+  const result = stem.analysisResult || {};
+  const issues = [];
+  const seen = new Set();
+  const add = (label) => {
+    if (label && !seen.has(label)) {
+      seen.add(label);
+      issues.push(label);
+    }
+  };
+  if (result.error) add("Failed");
+  if (result.clippingDetected) add("Clipping");
+  (result.warnings || []).forEach((warning) => add(shortWarning(warning)));
+  return issues;
+}
+
+function NeedsAttentionPanel({ items, playingStemId, onTogglePlay }) {
+  return (
+    <section className="mt-6 rounded-lg border border-amber-300/25 bg-amber-300/[0.06] p-4">
+      <div className="flex items-center gap-2">
+        <TriangleAlert size={17} className="text-amber-200" />
+        <h2 className="font-semibold text-white">Needs attention</h2>
+        <span className="rounded-full border border-amber-300/30 bg-amber-300/15 px-2 py-0.5 text-xs font-semibold text-amber-100">
+          {items.length} stem{items.length === 1 ? "" : "s"}
+        </span>
+      </div>
+      <p className="mt-1 text-sm text-zinc-400">Review these before cleaning or mixing.</p>
+      <div className="mt-3 space-y-2">
+        {items.map(({ stem, issues }) => (
+          <div key={stem.id} className="flex flex-wrap items-center gap-3 rounded-lg border border-white/10 bg-black/20 px-3 py-2">
+            <button
+              type="button"
+              onClick={() => onTogglePlay(stem.id)}
+              disabled={!stem.originalFileUrl}
+              className="grid h-8 w-8 shrink-0 place-items-center rounded-lg border border-teal-200/30 bg-teal-300/10 text-teal-50 transition hover:bg-teal-300/20 disabled:cursor-not-allowed disabled:opacity-40"
+              aria-label={playingStemId === stem.id ? `Pause ${stem.originalFilename}` : `Preview ${stem.originalFilename}`}
+              title={stem.originalFileUrl ? "Preview stem" : "Preview unavailable"}
+            >
+              {playingStemId === stem.id ? <Pause size={14} /> : <Play size={14} />}
+            </button>
+            <span className="min-w-0 flex-1 truncate text-sm font-medium text-white">{stem.originalFilename}</span>
+            <div className="flex flex-wrap gap-1.5">
+              {issues.map((issue) => (
+                <WarningBadge key={issue} label={issue} />
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+    </section>
   );
 }
 

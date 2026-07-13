@@ -32,7 +32,7 @@ const vocalTypes = new Set(["Lead Vocal", "Backing Vocal"]);
 const defaultOptions = {
   presets: ["AI Pop Clean", "AI Studio Clear", "Suno-Style Lead", "Suno Clean Dry", "Natural Clean", "Pop Vocal", "Worship Lead", "Live Vocal Fix", "Bright AI Polish", "Warm Ballad", "Backing Vocal Wide"],
   pitchCorrectionModes: ["Off", "Natural", "Medium", "Strong"],
-  fxStyles: ["Dry", "Natural Plate", "Small Hall", "Slap Delay", "Quarter Delay", "Worship Wide"],
+  fxStyles: ["Dry", "Natural Plate", "Small Hall", "Slap Delay", "Quarter Delay", "Worship Wide", "Suno Space"],
   keys: ["Auto", "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"],
   scales: ["Major", "Minor", "Chromatic"],
 };
@@ -1136,7 +1136,7 @@ function Readout({ label, value }) {
 function vocalSettings(stem) {
   return {
     enabled: false,
-    preset: "AI Pop Clean",
+    preset: "Suno-Style Lead",
     pitchCorrection: "Off",
     key: "Auto",
     scale: "Major",
