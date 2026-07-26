@@ -76,6 +76,8 @@ class UpdateMasteringControlsRequest(BaseModel):
     outputFormat: str | None = None
     trimStartSeconds: float | None = Field(default=None, ge=0)
     trimEndSeconds: float | None = Field(default=None, ge=0)
+    referenceMatchAmount: float | None = Field(default=None, ge=0, le=100)
+    matchReferenceLoudness: bool | None = None
 
 
 class GenerateMasterRequest(BaseModel):
@@ -89,6 +91,9 @@ class GenerateMasterRequest(BaseModel):
     stereoWidth: float = Field(default=55, ge=0, le=100)
     trimStartSeconds: float = Field(default=0, ge=0)
     trimEndSeconds: float = Field(default=0, ge=0)
+    useReference: bool = True
+    referenceMatchAmount: float = Field(default=70, ge=0, le=100)
+    matchReferenceLoudness: bool = False
 
 
 class ExportMixRequest(BaseModel):
@@ -467,6 +472,7 @@ class MixVersion(BaseModel):
     peakDbfs: float | None = None
     truePeakDbfs: float | None = None
     limiterGainDb: float = 0
+    tempoBpm: float | None = None
     targetLufsRecommendation: float | None = None
     settings: dict = Field(default_factory=dict)
     sourceFiles: list[MixVersionSource] = Field(default_factory=list)
@@ -499,6 +505,18 @@ class MasteringControls(BaseModel):
     outputFormat: str = "WAV 16-bit"
     trimStartSeconds: float = 0
     trimEndSeconds: float = 0
+    referenceMatchAmount: float = 70
+    matchReferenceLoudness: bool = False
+
+
+class MasteringReference(BaseModel):
+    filename: str
+    filePath: str
+    fileUrl: str | None = None
+    uploadedAt: str | None = None
+    durationSeconds: float | None = None
+    integratedLufs: float | None = None
+    truePeakDbfs: float | None = None
 
 
 class LoudnessReport(BaseModel):
@@ -732,6 +750,7 @@ class VideoEditorStateResponse(BaseModel):
 
 class MasteringSettings(BaseModel):
     controls: MasteringControls = Field(default_factory=MasteringControls)
+    reference: MasteringReference | None = None
     masterVersions: list[MasterVersion] = Field(default_factory=list)
     latestMasterVersionId: str | None = None
     exportFiles: list[ExportFile] = Field(default_factory=list)

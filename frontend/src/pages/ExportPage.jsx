@@ -11,8 +11,10 @@ import {
   getProcessingJob,
   getProject,
   listMasteringPresets,
+  removeMasteringReference,
   startMasteringJob,
   updateMasteringControls,
+  uploadMasteringReference,
 } from "../api.js";
 import Button from "../components/Button.jsx";
 import EmptyState from "../components/EmptyState.jsx";
@@ -32,6 +34,8 @@ const defaultControls = {
   outputFormat: "WAV 16-bit",
   trimStartSeconds: 0,
   trimEndSeconds: 0,
+  referenceMatchAmount: 70,
+  matchReferenceLoudness: false,
 };
 const runningStatuses = new Set(["Pending", "Processing", "Cancelling"]);
 
@@ -57,6 +61,7 @@ export default function ExportPage() {
   const mixVersions = project?.mixSettings?.mixVersions || [];
   const masteringSettings = project?.masteringSettings || {};
   const controls = { ...defaultControls, ...(masteringSettings.controls || {}) };
+  const reference = masteringSettings.reference || null;
   const masterVersions = masteringSettings.masterVersions || [];
   const exportFiles = masteringSettings.exportFiles || [];
   const exportCount = latestExport && !exportFiles.some((file) => file.id === latestExport.id) ? exportFiles.length + 1 : exportFiles.length;
@@ -218,6 +223,33 @@ export default function ExportPage() {
     }
   };
 
+  const uploadReference = async (file) => {
+    if (!file) return;
+    setActionLoading("reference");
+    setError("");
+    try {
+      setProject(await uploadMasteringReference(projectId, file));
+      setNotice(`Reference track "${file.name}" ready. New masters will match its tone.`);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setActionLoading("");
+    }
+  };
+
+  const removeReference = async () => {
+    setActionLoading("reference");
+    setError("");
+    try {
+      setProject(await removeMasteringReference(projectId));
+      setNotice("Reference track removed. Masters will use preset targets only.");
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setActionLoading("");
+    }
+  };
+
   const runMaster = async () => {
     if (!selectedMixId) {
       setError("Generate or select a mix version before mastering.");
@@ -240,6 +272,9 @@ export default function ExportPage() {
         stereoWidth: controls.stereoWidth,
         trimStartSeconds,
         trimEndSeconds,
+        useReference: Boolean(reference),
+        referenceMatchAmount: controls.referenceMatchAmount,
+        matchReferenceLoudness: Boolean(controls.matchReferenceLoudness),
       };
       const job = await startMasteringJob(projectId, payload);
       setMasterJob(job);
@@ -551,6 +586,21 @@ export default function ExportPage() {
                 onReset={() => {
                   updateControlLocal({ trimStartSeconds: 0, trimEndSeconds: 0 });
                   commitControls({ trimStartSeconds: 0, trimEndSeconds: 0 });
+                }}
+              />
+
+              <ReferenceMatchPanel
+                reference={reference}
+                matchAmount={controls.referenceMatchAmount}
+                matchLoudness={Boolean(controls.matchReferenceLoudness)}
+                busy={actionLoading === "reference"}
+                onUpload={uploadReference}
+                onRemove={removeReference}
+                onAmountChange={(value) => updateControlLocal({ referenceMatchAmount: value })}
+                onAmountCommit={(value) => commitControls({ referenceMatchAmount: value })}
+                onLoudnessToggle={(value) => {
+                  updateControlLocal({ matchReferenceLoudness: value });
+                  commitControls({ matchReferenceLoudness: value });
                 }}
               />
 
@@ -934,6 +984,75 @@ function SecondsControl({ label, helper, value, onChange, onCommit }) {
       />
       <p className="mt-2 text-xs leading-5 text-zinc-500">{helper}</p>
     </label>
+  );
+}
+
+function ReferenceMatchPanel({ reference, matchAmount, matchLoudness, busy, onUpload, onRemove, onAmountChange, onAmountCommit, onLoudnessToggle }) {
+  return (
+    <div className="mt-4 rounded-lg border border-white/10 bg-white/[0.04] p-4">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="flex items-start gap-3">
+          <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg border border-white/10 bg-black/25 text-teal-200">
+            <FileAudio size={17} />
+          </span>
+          <div>
+            <h3 className="font-semibold text-white">Reference Match</h3>
+            <p className="mt-1 text-sm leading-6 text-zinc-400">
+              Upload a commercial track you want this master to sound like. The master EQ and stereo width are shaped toward the reference before limiting.
+            </p>
+          </div>
+        </div>
+        <label className={`inline-flex cursor-pointer items-center gap-2 rounded-lg border border-teal-200/30 bg-teal-300/10 px-3 py-2 text-sm font-semibold text-teal-100 transition hover:bg-teal-300/20 ${busy ? "pointer-events-none opacity-60" : ""}`}>
+          <RefreshCw size={15} className={busy ? "animate-spin" : ""} />
+          {reference ? "Replace Reference" : "Upload Reference"}
+          <input
+            type="file"
+            accept=".wav,.mp3,.flac,.m4a,.aac,.ogg,.aiff,.aif,audio/*"
+            className="hidden"
+            disabled={busy}
+            onChange={(event) => {
+              const file = event.target.files?.[0];
+              event.target.value = "";
+              if (file) onUpload(file);
+            }}
+          />
+        </label>
+      </div>
+
+      {reference ? (
+        <div className="mt-4 grid gap-3 sm:grid-cols-2">
+          <div className="rounded-lg border border-white/10 bg-black/20 px-3 py-3">
+            <p className="text-xs font-semibold uppercase tracking-[0.12em] text-zinc-500">Reference Track</p>
+            <p className="mt-1 truncate text-sm font-semibold text-zinc-100">{reference.filename}</p>
+            <p className="mt-1 text-xs text-zinc-500">
+              {formatLufs(reference.integratedLufs)} - {formatDuration(reference.durationSeconds)}
+            </p>
+            <button
+              type="button"
+              onClick={onRemove}
+              disabled={busy}
+              className="mt-2 inline-flex items-center gap-1.5 text-xs font-semibold text-rose-300 transition hover:text-rose-200 disabled:opacity-60"
+            >
+              <Trash2 size={13} /> Remove reference
+            </button>
+          </div>
+          <div className="flex flex-col justify-between gap-3">
+            <ControlSlider label="Match Amount" value={matchAmount} onChange={onAmountChange} onCommit={onAmountCommit} />
+            <label className="flex cursor-pointer items-center gap-2 text-sm text-zinc-300">
+              <input
+                type="checkbox"
+                checked={matchLoudness}
+                onChange={(event) => onLoudnessToggle(event.target.checked)}
+                className="h-4 w-4 rounded border-white/20 bg-black/30 accent-teal-300"
+              />
+              Match reference loudness instead of preset target
+            </label>
+          </div>
+        </div>
+      ) : (
+        <p className="mt-3 text-xs text-zinc-500">No reference uploaded. Masters use the preset loudness target and manual tone controls only.</p>
+      )}
+    </div>
   );
 }
 

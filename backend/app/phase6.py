@@ -7,9 +7,9 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
-from fastapi import HTTPException
+from fastapi import HTTPException, UploadFile
 
-from .audio_engine import ensure_audio_environment, export_audio_file, master_audio_file
+from .audio_engine import analyze_audio_file, ensure_audio_environment, export_audio_file, master_audio_file
 from .logging_utils import append_project_log, utc_now_iso
 from .models import ExportFile, ExportMixRequest, GenerateMasterRequest, MasterVersion, ProcessingJob, Project, ProjectBackupRequest, UpdateMasteringControlsRequest
 from .storage import (
@@ -22,6 +22,7 @@ from .storage import (
     resolve_stored_file_path,
     store,
     _find_project,
+    _write_upload_file,
 )
 
 
@@ -77,8 +78,11 @@ def update_mastering_controls(project_id: str, payload: UpdateMasteringControlsR
             raise HTTPException(status_code=400, detail="Unsupported output format.")
         controls["outputFormat"] = output_format
 
+    if "matchReferenceLoudness" in fields and payload.matchReferenceLoudness is not None:
+        controls["matchReferenceLoudness"] = bool(payload.matchReferenceLoudness)
+
     for field in fields:
-        if field in {"selectedMixVersionId", "preset", "outputFormat"}:
+        if field in {"selectedMixVersionId", "preset", "outputFormat", "matchReferenceLoudness"}:
             continue
         value = getattr(payload, field)
         if value is not None:
@@ -89,6 +93,97 @@ def update_mastering_controls(project_id: str, payload: UpdateMasteringControlsR
     project["updatedAt"] = now
     store.save(data)
     append_project_log(project_subdirs(project_id)["logs"], f"Updated mastering controls for {controls.get('preset', 'Streaming')} preset.")
+    return Project(**project)
+
+
+ALLOWED_REFERENCE_EXTENSIONS = {".wav", ".mp3", ".flac", ".m4a", ".aac", ".ogg", ".aiff", ".aif"}
+
+
+async def upload_mastering_reference(project_id: str, upload: UploadFile) -> Project:
+    try:
+        ensure_audio_environment()
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    original_filename = Path(upload.filename or "reference").name
+    extension = Path(original_filename).suffix.lower()
+    if extension not in ALLOWED_REFERENCE_EXTENSIONS:
+        supported = ", ".join(ext[1:].upper() for ext in sorted(ALLOWED_REFERENCE_EXTENSIONS))
+        raise HTTPException(status_code=400, detail=f"Unsupported reference file type '{extension or 'none'}'. Supported formats: {supported}.")
+
+    data = store.load()
+    project = _find_project(data, project_id)
+    previous = (project.get("masteringSettings") or {}).get("reference")
+
+    dirs = ensure_project_dirs(project_id)
+    reference_dir = dirs["root"] / "reference"
+    reference_dir.mkdir(parents=True, exist_ok=True)
+    destination = reference_dir / original_filename
+    if destination.exists():
+        destination.unlink()
+
+    try:
+        await _write_upload_file(upload, destination)
+        metrics = analyze_audio_file(destination)
+    except ValueError as exc:
+        if destination.exists():
+            destination.unlink()
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        if destination.exists():
+            destination.unlink()
+        raise HTTPException(status_code=400, detail=str(exc) or "Could not analyze the reference track.") from exc
+    finally:
+        await upload.close()
+
+    now = utc_now_iso()
+    record = {
+        "filename": original_filename,
+        "filePath": display_path(destination),
+        "fileUrl": _media_url(display_path(destination)),
+        "uploadedAt": now,
+        "durationSeconds": metrics.get("durationSeconds"),
+        "integratedLufs": metrics.get("integratedLufs"),
+        "truePeakDbfs": metrics.get("truePeakDbfs"),
+    }
+
+    data = store.load()
+    project = _find_project(data, project_id)
+    settings = _ensure_mastering_settings(project)
+    settings["reference"] = record
+    settings["updatedAt"] = now
+    project["updatedAt"] = now
+    store.save(data)
+
+    if previous and previous.get("filePath") and previous.get("filename") != original_filename:
+        try:
+            old_path = resolve_stored_file_path(previous["filePath"])
+            if old_path.exists():
+                old_path.unlink()
+        except Exception:
+            pass
+
+    append_project_log(project_subdirs(project_id)["logs"], f"Reference track '{original_filename}' uploaded for mastering match.")
+    return Project(**project)
+
+
+def remove_mastering_reference(project_id: str) -> Project:
+    data = store.load()
+    project = _find_project(data, project_id)
+    settings = _ensure_mastering_settings(project)
+    reference = settings.get("reference")
+    if reference and reference.get("filePath"):
+        try:
+            path = resolve_stored_file_path(reference["filePath"])
+            if path.exists():
+                path.unlink()
+        except Exception:
+            pass
+    settings["reference"] = None
+    now = utc_now_iso()
+    settings["updatedAt"] = now
+    project["updatedAt"] = now
+    store.save(data)
+    append_project_log(project_subdirs(project_id)["logs"], "Reference track removed from mastering.")
     return Project(**project)
 
 
@@ -212,6 +307,19 @@ def generate_master(project_id: str, payload: GenerateMasterRequest, progress_ca
     controls["targetLufs"] = target_lufs
     controls["truePeakCeilingDb"] = TRUE_PEAK_CEILING_DB
 
+    reference_record = (project.get("masteringSettings") or {}).get("reference")
+    reference_filename = None
+    if payload.useReference and reference_record and reference_record.get("filePath"):
+        try:
+            reference_file = resolve_stored_file_path(reference_record["filePath"])
+            if reference_file.exists():
+                controls["referencePath"] = str(reference_file)
+                reference_filename = reference_record.get("filename")
+            else:
+                append_project_log(project_subdirs(project_id)["logs"], "Reference track file is missing; mastering without reference match.")
+        except Exception:
+            append_project_log(project_subdirs(project_id)["logs"], "Reference track could not be resolved; mastering without reference match.")
+
     masters_dir = project_subdirs(project_id)["exports"] / "masters"
     reports_dir = project_subdirs(project_id)["exports"] / "reports"
     version_number = _next_master_version(project, masters_dir)
@@ -251,6 +359,9 @@ def generate_master(project_id: str, payload: GenerateMasterRequest, progress_ca
         "sourceMixLabel": mix_version.get("label"),
         "trimStartSeconds": payload.trimStartSeconds,
         "trimEndSeconds": payload.trimEndSeconds,
+        "referenceTrack": reference_filename,
+        "referenceMatchAmount": payload.referenceMatchAmount if reference_filename else None,
+        "matchReferenceLoudness": payload.matchReferenceLoudness if reference_filename else None,
         "inputMetrics": result.input_metrics,
         "outputMetrics": result.output_metrics,
         "operations": result.operations,
@@ -305,6 +416,8 @@ def generate_master(project_id: str, payload: GenerateMasterRequest, progress_ca
             "outputFormat": payload.outputFormat,
             "trimStartSeconds": payload.trimStartSeconds,
             "trimEndSeconds": payload.trimEndSeconds,
+            "referenceMatchAmount": payload.referenceMatchAmount,
+            "matchReferenceLoudness": payload.matchReferenceLoudness,
         }
     )
     settings["updatedAt"] = now
@@ -411,6 +524,7 @@ def _ensure_mastering_settings(project: dict[str, Any]) -> dict[str, Any]:
     settings.setdefault("controls", _default_mastering_controls())
     for key, value in _default_mastering_controls().items():
         settings["controls"].setdefault(key, value)
+    settings.setdefault("reference", None)
     settings.setdefault("masterVersions", [])
     settings.setdefault("latestMasterVersionId", None)
     settings.setdefault("exportFiles", [])
@@ -463,6 +577,8 @@ def _default_mastering_controls() -> dict[str, Any]:
         "outputFormat": "WAV 16-bit",
         "trimStartSeconds": 0,
         "trimEndSeconds": 0,
+        "referenceMatchAmount": 70,
+        "matchReferenceLoudness": False,
     }
 
 

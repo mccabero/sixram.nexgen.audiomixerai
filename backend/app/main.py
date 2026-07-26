@@ -73,6 +73,7 @@ from .phase5 import (
     update_mix_controls,
     update_mix_version,
 )
+from .auto_polish import create_auto_polish_job, run_auto_polish_job
 from .phase6 import (
     create_mastering_job,
     create_project_backup,
@@ -80,8 +81,10 @@ from .phase6 import (
     export_mix_without_mastering,
     generate_master,
     get_mastering_presets,
+    remove_mastering_reference,
     run_mastering_job,
     update_mastering_controls,
+    upload_mastering_reference,
 )
 from .stem_detection import (
     accept_all_confident_detections,
@@ -586,6 +589,16 @@ def api_update_mastering_controls(project_id: str, payload: UpdateMasteringContr
     return update_mastering_controls(project_id, payload)
 
 
+@app.post("/api/projects/{project_id}/mastering-reference", response_model=Project)
+async def api_upload_mastering_reference(project_id: str, file: UploadFile = File(...)) -> Project:
+    return await upload_mastering_reference(project_id, file)
+
+
+@app.delete("/api/projects/{project_id}/mastering-reference", response_model=Project)
+def api_remove_mastering_reference(project_id: str) -> Project:
+    return remove_mastering_reference(project_id)
+
+
 @app.post("/api/projects/{project_id}/masters", response_model=MasterVersion)
 def api_generate_master(project_id: str, payload: GenerateMasterRequest) -> MasterVersion:
     return generate_master(project_id, payload)
@@ -595,6 +608,13 @@ def api_generate_master(project_id: str, payload: GenerateMasterRequest) -> Mast
 def api_start_mastering_job(project_id: str, payload: GenerateMasterRequest, background_tasks: BackgroundTasks) -> ProcessingJob:
     job = create_mastering_job(project_id, payload)
     background_tasks.add_task(run_mastering_job, project_id, job.id, payload)
+    return job
+
+
+@app.post("/api/projects/{project_id}/auto-polish", response_model=ProcessingJob)
+def api_start_auto_polish(project_id: str, background_tasks: BackgroundTasks) -> ProcessingJob:
+    job = create_auto_polish_job(project_id)
+    background_tasks.add_task(run_auto_polish_job, project_id, job.id)
     return job
 
 

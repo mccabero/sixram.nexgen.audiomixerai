@@ -454,6 +454,33 @@ export function generateMaster(projectId, payload) {
   });
 }
 
+export function startAutoPolish(projectId) {
+  return request(`/projects/${projectId}/auto-polish`, {
+    method: "POST",
+  });
+}
+
+export function uploadMasteringReference(projectId, file) {
+  const formData = new FormData();
+  formData.append("file", file);
+  return fetch(`${API_BASE}/projects/${projectId}/mastering-reference`, {
+    method: "POST",
+    body: formData,
+  }).then(async (response) => {
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(payload.detail || "Reference upload failed.");
+    }
+    return payload;
+  });
+}
+
+export function removeMasteringReference(projectId) {
+  return request(`/projects/${projectId}/mastering-reference`, {
+    method: "DELETE",
+  });
+}
+
 export function startMasteringJob(projectId, payload) {
   return request(`/projects/${projectId}/masters-job`, {
     method: "POST",

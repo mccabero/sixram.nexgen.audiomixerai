@@ -422,6 +422,7 @@ def generate_advanced_mix_preview(project_id: str, instrumental: bool = False, p
         "peakDbfs": result.peak_dbfs,
         "truePeakDbfs": result.true_peak_dbfs,
         "limiterGainDb": result.limiter_gain_db,
+        "tempoBpm": result.tempo_bpm,
         "targetLufsRecommendation": MIX_PRESETS[preset_name]["targetLufsRecommendation"],
         "settings": {
             "controls": deepcopy(controls),

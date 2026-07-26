@@ -1,7 +1,7 @@
-import { ArrowLeft, BarChart3, Film, Pencil, Trash2, UploadCloud } from "lucide-react";
+import { ArrowLeft, BarChart3, Film, Pencil, Sparkles, Trash2, UploadCloud } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { deleteProject, deleteStem, getProject, updateProject, updateStemType } from "../api.js";
+import { cancelProcessingJob, deleteProject, deleteStem, getProcessingJob, getProject, startAutoPolish, updateProject, updateStemType } from "../api.js";
 import Button from "../components/Button.jsx";
 import CreateProjectModal from "../components/CreateProjectModal.jsx";
 import EmptyState from "../components/EmptyState.jsx";
@@ -20,7 +20,12 @@ export default function ProjectDetail() {
   const [busyStemId, setBusyStemId] = useState("");
   const [actionMessage, setActionMessage] = useState("");
   const [editOpen, setEditOpen] = useState(false);
+  const [polishJob, setPolishJob] = useState(null);
+  const [polishNotice, setPolishNotice] = useState("");
+  const [stoppingPolish, setStoppingPolish] = useState(false);
   const navigate = useNavigate();
+  const runningStatuses = new Set(["Pending", "Processing", "Cancelling"]);
+  const polishRunning = Boolean(polishJob && runningStatuses.has(polishJob.status));
 
   const loadProject = async () => {
     setLoading(true);
@@ -37,6 +42,46 @@ export default function ProjectDetail() {
   useEffect(() => {
     loadProject();
   }, [projectId]);
+
+  useEffect(() => {
+    if (!polishJob?.id || !runningStatuses.has(polishJob.status)) return undefined;
+    const timer = window.setInterval(async () => {
+      try {
+        const nextJob = await getProcessingJob(projectId, polishJob.id);
+        setPolishJob(nextJob);
+        if (!runningStatuses.has(nextJob.status)) {
+          setStoppingPolish(false);
+          setPolishNotice(nextJob.message || (nextJob.status === "Completed" ? "Auto Polish complete." : "Auto Polish stopped."));
+          await loadProject();
+        }
+      } catch {
+        // keep polling; transient fetch errors are fine
+      }
+    }, 2500);
+    return () => window.clearInterval(timer);
+  }, [projectId, polishJob?.id, polishJob?.status]);
+
+  const handleAutoPolish = async () => {
+    setError("");
+    setPolishNotice("");
+    try {
+      const job = await startAutoPolish(projectId);
+      setPolishJob(job);
+    } catch (err) {
+      setError(err.message);
+    }
+  };
+
+  const handleStopPolish = async () => {
+    if (!polishJob?.id || stoppingPolish) return;
+    setStoppingPolish(true);
+    try {
+      setPolishJob(await cancelProcessingJob(projectId, polishJob.id));
+    } catch (err) {
+      setError(err.message);
+      setStoppingPolish(false);
+    }
+  };
 
   const handleChangeType = async (stemId, stemType) => {
     setBusyStemId(stemId);
@@ -150,6 +195,52 @@ export default function ProjectDetail() {
 
         <WorkflowGuide project={project} currentStep="project" className="mt-5" onProjectRefresh={loadProject} />
       </div>
+
+      {project.stems.length ? (
+        <section className="mt-5 rounded-lg border border-teal-200/20 bg-gradient-to-br from-teal-300/10 via-white/[0.04] to-black/25 p-4 shadow-[0_18px_55px_rgba(0,0,0,0.2)]">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex items-start gap-3">
+              <span className="grid h-10 w-10 shrink-0 place-items-center rounded-lg border border-teal-200/25 bg-black/25 text-teal-100">
+                <Sparkles size={19} />
+              </span>
+              <div>
+                <h2 className="text-lg font-semibold text-white">Auto Polish</h2>
+                <p className="mt-1 text-sm leading-6 text-zinc-400">
+                  One click runs the whole workflow with recommended settings: analyze, clean each stem, enhance vocals, mix, and master.
+                  Uses your current mastering preset{project.masteringSettings?.reference ? " and reference track" : ""}. Expect several minutes for a full song.
+                </p>
+              </div>
+            </div>
+            <Button type="button" onClick={handleAutoPolish} disabled={polishRunning} className="shrink-0">
+              <Sparkles size={17} />
+              {polishRunning ? "Polishing..." : "Auto Polish"}
+            </Button>
+          </div>
+          {polishRunning ? (
+            <div className="mt-4">
+              <ProcessingPanel
+                title={polishJob.status === "Cancelling" ? "Stopping Auto Polish" : "Auto Polish Running"}
+                message={polishJob.message || "Working through cleaning, vocals, mix, and master."}
+                progress={polishJob.progress || 0}
+                actionLabel="Stop"
+                actionBusy={stoppingPolish || polishJob.status === "Cancelling"}
+                actionDisabled={stoppingPolish || polishJob.status === "Cancelling"}
+                onAction={handleStopPolish}
+              />
+            </div>
+          ) : null}
+          {!polishRunning && polishNotice ? (
+            <p className={`mt-3 rounded-lg border px-3 py-2 text-sm ${polishJob?.status === "Completed" ? "border-teal-200/25 bg-teal-300/10 text-teal-100" : "border-amber-300/25 bg-amber-400/10 text-amber-100"}`}>
+              {polishNotice}
+              {polishJob?.status === "Completed" ? (
+                <Link to={`/projects/${project.id}/mastering`} className="ml-2 font-semibold underline decoration-teal-200/50 hover:text-white">
+                  Review the master
+                </Link>
+              ) : null}
+            </p>
+          ) : null}
+        </section>
+      ) : null}
 
       {error ? <p className="mt-5 rounded-lg border border-rose-300/20 bg-rose-400/10 px-3 py-2 text-sm text-rose-100">{error}</p> : null}
       {actionMessage ? (
