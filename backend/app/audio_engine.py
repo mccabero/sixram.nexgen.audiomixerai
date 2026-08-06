@@ -1874,12 +1874,23 @@ def _match_reference(audio: np.ndarray, sample_rate: int, reference: np.ndarray,
     strongest = float(np.max(np.abs(gain_db)))
     operations.append(f"reference tonal match (max {strongest:.1f} dB band move, {int(round(amount * 100))}% amount)")
 
-    # Stereo width toward the reference's side/mid balance.
+    # Stereo width toward the reference's side/mid balance. The upper cap is
+    # kept musical: amplifying the side channel beyond +25% tends to introduce
+    # phase artifacts and mono-compatibility problems on real playback systems.
     mix_width = _width_ratio(audio)
     ref_width = _width_ratio(reference_window)
     if mix_width is not None and ref_width is not None and mix_width > 1e-4:
-        width_change = max(-0.4, min(0.6, (ref_width / mix_width - 1.0) * amount * 0.7))
+        width_change = max(-0.4, min(0.25, (ref_width / mix_width - 1.0) * amount * 0.7))
         if abs(width_change) > 0.03:
+            if width_change > 0 and audio.ndim == 2 and audio.shape[1] >= 2:
+                # Bass-mono the side channel before widening: sub-bass phase-
+                # scrambling from amplified side content is the primary cause
+                # of "growl" / rumble on aggressive width matches.
+                mid = (audio[:, 0] + audio[:, 1]) * 0.5
+                side = (audio[:, 0] - audio[:, 1]) * 0.5
+                sos = signal.butter(2, 150.0, btype="highpass", fs=sample_rate, output="sos")
+                side = signal.sosfilt(sos, side).astype(np.float32, copy=False)
+                audio = np.stack([mid + side, mid - side], axis=1).astype(np.float32, copy=False)
             audio = _apply_width(audio, width_change)
             operations.append(f"reference width match ({width_change:+.2f} side adjustment)")
 

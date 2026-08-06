@@ -1,4 +1,4 @@
-import { ArrowLeft, Archive, CheckCircle2, ChevronDown, Download, FileAudio, Film, Gauge, RefreshCw, Scissors, Settings2, ShieldCheck, Sparkles, Trash2, TriangleAlert } from "lucide-react";
+import { ArrowLeft, Archive, CheckCircle2, ChevronDown, Download, FileAudio, Film, Gauge, Link as LinkIcon, RefreshCw, Scissors, Settings2, ShieldCheck, Sparkles, Trash2, TriangleAlert } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import {
@@ -11,10 +11,10 @@ import {
   getProcessingJob,
   getProject,
   listMasteringPresets,
+  importMasteringReferenceFromUrl,
   removeMasteringReference,
   startMasteringJob,
   updateMasteringControls,
-  uploadMasteringReference,
 } from "../api.js";
 import Button from "../components/Button.jsx";
 import EmptyState from "../components/EmptyState.jsx";
@@ -223,13 +223,20 @@ export default function ExportPage() {
     }
   };
 
-  const uploadReference = async (file) => {
-    if (!file) return;
+  const importReferenceFromUrl = async (url) => {
+    const trimmed = (url || "").trim();
+    if (!trimmed) return;
+    if (!/^https?:\/\//i.test(trimmed)) {
+      setError("Reference URL must start with http:// or https://.");
+      return;
+    }
     setActionLoading("reference");
     setError("");
     try {
-      setProject(await uploadMasteringReference(projectId, file));
-      setNotice(`Reference track "${file.name}" ready. New masters will match its tone.`);
+      const updated = await importMasteringReferenceFromUrl(projectId, trimmed);
+      setProject(updated);
+      const filename = updated?.masteringSettings?.reference?.filename || "reference";
+      setNotice(`Reference track "${filename}" ready. New masters will match its tone.`);
     } catch (err) {
       setError(err.message);
     } finally {
@@ -594,7 +601,7 @@ export default function ExportPage() {
                 matchAmount={controls.referenceMatchAmount}
                 matchLoudness={Boolean(controls.matchReferenceLoudness)}
                 busy={actionLoading === "reference"}
-                onUpload={uploadReference}
+                onImportUrl={importReferenceFromUrl}
                 onRemove={removeReference}
                 onAmountChange={(value) => updateControlLocal({ referenceMatchAmount: value })}
                 onAmountCommit={(value) => commitControls({ referenceMatchAmount: value })}
@@ -987,36 +994,57 @@ function SecondsControl({ label, helper, value, onChange, onCommit }) {
   );
 }
 
-function ReferenceMatchPanel({ reference, matchAmount, matchLoudness, busy, onUpload, onRemove, onAmountChange, onAmountCommit, onLoudnessToggle }) {
+function ReferenceMatchPanel({ reference, matchAmount, matchLoudness, busy, onImportUrl, onRemove, onAmountChange, onAmountCommit, onLoudnessToggle }) {
+  const [urlValue, setUrlValue] = useState("");
+
+  const submitUrl = () => {
+    const trimmed = urlValue.trim();
+    if (!trimmed || busy) return;
+    onImportUrl(trimmed);
+    setUrlValue("");
+  };
+
   return (
     <div className="mt-4 rounded-lg border border-white/10 bg-white/[0.04] p-4">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="flex items-start gap-3">
-          <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg border border-white/10 bg-black/25 text-teal-200">
-            <FileAudio size={17} />
-          </span>
-          <div>
-            <h3 className="font-semibold text-white">Reference Match</h3>
-            <p className="mt-1 text-sm leading-6 text-zinc-400">
-              Upload a commercial track you want this master to sound like. The master EQ and stereo width are shaped toward the reference before limiting.
-            </p>
-          </div>
+      <div className="flex items-start gap-3">
+        <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg border border-white/10 bg-black/25 text-teal-200">
+          <FileAudio size={17} />
+        </span>
+        <div className="flex-1">
+          <h3 className="font-semibold text-white">Reference Match</h3>
+          <p className="mt-1 text-sm leading-6 text-zinc-400">
+            Paste a YouTube (or other supported streaming) URL of a commercial track you want this master to sound like. The audio is downloaded and the master EQ and stereo width are shaped toward it before limiting.
+          </p>
         </div>
-        <label className={`inline-flex cursor-pointer items-center gap-2 rounded-lg border border-teal-200/30 bg-teal-300/10 px-3 py-2 text-sm font-semibold text-teal-100 transition hover:bg-teal-300/20 ${busy ? "pointer-events-none opacity-60" : ""}`}>
-          <RefreshCw size={15} className={busy ? "animate-spin" : ""} />
-          {reference ? "Replace Reference" : "Upload Reference"}
+      </div>
+
+      <div className="mt-3 flex flex-wrap items-center gap-2">
+        <div className="relative min-w-[220px] flex-1">
+          <LinkIcon size={14} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500" />
           <input
-            type="file"
-            accept=".wav,.mp3,.flac,.m4a,.aac,.ogg,.aiff,.aif,audio/*"
-            className="hidden"
-            disabled={busy}
-            onChange={(event) => {
-              const file = event.target.files?.[0];
-              event.target.value = "";
-              if (file) onUpload(file);
+            type="url"
+            value={urlValue}
+            onChange={(event) => setUrlValue(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") {
+                event.preventDefault();
+                submitUrl();
+              }
             }}
+            placeholder="https://www.youtube.com/watch?v=..."
+            disabled={busy}
+            className="h-10 w-full rounded-lg border border-white/10 bg-black/25 pl-8 pr-3 text-sm text-white placeholder:text-zinc-600 disabled:opacity-60"
           />
-        </label>
+        </div>
+        <button
+          type="button"
+          onClick={submitUrl}
+          disabled={busy || !urlValue.trim()}
+          className={`inline-flex items-center gap-2 rounded-lg border border-teal-200/30 bg-teal-300/10 px-3 py-2 text-sm font-semibold text-teal-100 transition hover:bg-teal-300/20 disabled:opacity-60 ${busy ? "pointer-events-none" : ""}`}
+        >
+          <RefreshCw size={15} className={busy ? "animate-spin" : ""} />
+          {busy ? "Fetching..." : reference ? "Replace Reference" : "Import Reference"}
+        </button>
       </div>
 
       {reference ? (
@@ -1027,6 +1055,17 @@ function ReferenceMatchPanel({ reference, matchAmount, matchLoudness, busy, onUp
             <p className="mt-1 text-xs text-zinc-500">
               {formatLufs(reference.integratedLufs)} - {formatDuration(reference.durationSeconds)}
             </p>
+            {reference.sourceUrl ? (
+              <a
+                href={reference.sourceUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="mt-1 block truncate text-xs text-teal-300 hover:text-teal-200"
+                title={reference.sourceUrl}
+              >
+                {reference.sourceUrl}
+              </a>
+            ) : null}
             <button
               type="button"
               onClick={onRemove}
@@ -1050,7 +1089,7 @@ function ReferenceMatchPanel({ reference, matchAmount, matchLoudness, busy, onUp
           </div>
         </div>
       ) : (
-        <p className="mt-3 text-xs text-zinc-500">No reference uploaded. Masters use the preset loudness target and manual tone controls only.</p>
+        <p className="mt-3 text-xs text-zinc-500">No reference imported. Masters use the preset loudness target and manual tone controls only.</p>
       )}
     </div>
   );

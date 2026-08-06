@@ -1,5 +1,7 @@
 import json
 import re
+import shutil
+import subprocess
 import threading
 import uuid
 import zipfile
@@ -11,7 +13,7 @@ from fastapi import HTTPException, UploadFile
 
 from .audio_engine import analyze_audio_file, ensure_audio_environment, export_audio_file, master_audio_file
 from .logging_utils import append_project_log, utc_now_iso
-from .models import ExportFile, ExportMixRequest, GenerateMasterRequest, MasterVersion, ProcessingJob, Project, ProjectBackupRequest, UpdateMasteringControlsRequest
+from .models import ExportFile, ExportMixRequest, GenerateMasterRequest, ImportMasteringReferenceUrlRequest, MasterVersion, ProcessingJob, Project, ProjectBackupRequest, UpdateMasteringControlsRequest
 from .storage import (
     JobCancelled,
     display_path,
@@ -163,6 +165,140 @@ async def upload_mastering_reference(project_id: str, upload: UploadFile) -> Pro
             pass
 
     append_project_log(project_subdirs(project_id)["logs"], f"Reference track '{original_filename}' uploaded for mastering match.")
+    return Project(**project)
+
+
+_URL_REFERENCE_PATTERN = re.compile(r"^https?://", re.IGNORECASE)
+_SAFE_TITLE_CHARS = re.compile(r"[^A-Za-z0-9._-]+")
+
+
+def _sanitize_reference_title(title: str, fallback: str = "reference") -> str:
+    cleaned = _SAFE_TITLE_CHARS.sub("_", title).strip("._-")
+    return cleaned[:80] or fallback
+
+
+def import_mastering_reference_from_url(project_id: str, payload: ImportMasteringReferenceUrlRequest) -> Project:
+    try:
+        ensure_audio_environment()
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    url = payload.url.strip()
+    if not _URL_REFERENCE_PATTERN.match(url):
+        raise HTTPException(status_code=400, detail="Reference URL must start with http:// or https://.")
+
+    try:
+        import yt_dlp  # type: ignore[import-not-found]
+    except ImportError as exc:
+        raise HTTPException(status_code=503, detail="yt-dlp is not installed. Run 'pip install yt-dlp'.") from exc
+
+    from .audio_engine import _ffmpeg_exe
+
+    try:
+        ffmpeg_path = _ffmpeg_exe()
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    data = store.load()
+    project = _find_project(data, project_id)
+    previous = (project.get("masteringSettings") or {}).get("reference")
+
+    dirs = ensure_project_dirs(project_id)
+    reference_dir = dirs["root"] / "reference"
+    reference_dir.mkdir(parents=True, exist_ok=True)
+
+    tmp_dir = reference_dir / f".download-{uuid.uuid4().hex}"
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+
+    ydl_opts = {
+        "format": "bestaudio/best",
+        "outtmpl": str(tmp_dir / "%(title).80s.%(ext)s"),
+        "restrictfilenames": True,
+        "noplaylist": True,
+        "quiet": True,
+        "no_warnings": True,
+        "js_runtimes": {"node": {}},
+        "extractor_args": {
+            "youtube": {"player_client": ["tv", "ios", "web_safari", "android", "web"]},
+        },
+    }
+
+    downloaded_title = "reference"
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=True)
+            if isinstance(info, dict):
+                downloaded_title = info.get("title") or downloaded_title
+
+        downloaded_files = [p for p in tmp_dir.iterdir() if p.is_file()]
+        if not downloaded_files:
+            raise HTTPException(status_code=400, detail="No audio was downloaded from the provided URL.")
+        source_media = downloaded_files[0]
+
+        safe_title = _sanitize_reference_title(downloaded_title)
+        destination = reference_dir / f"{safe_title}.wav"
+        counter = 1
+        while destination.exists():
+            destination = reference_dir / f"{safe_title}_{counter}.wav"
+            counter += 1
+
+        result = subprocess.run(
+            [
+                ffmpeg_path,
+                "-y",
+                "-i", str(source_media),
+                "-vn",
+                "-acodec", "pcm_s16le",
+                "-ar", "44100",
+                str(destination),
+            ],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0 or not destination.exists():
+            stderr_tail = (result.stderr or "").strip().splitlines()[-3:]
+            raise HTTPException(status_code=400, detail=f"ffmpeg failed to convert the downloaded audio: {' | '.join(stderr_tail) or 'unknown error'}")
+
+        original_filename = destination.name
+        metrics = analyze_audio_file(destination)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        message = str(exc) or "Could not download or analyze the reference from the provided URL."
+        raise HTTPException(status_code=400, detail=message) from exc
+    finally:
+        if tmp_dir.exists():
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    now = utc_now_iso()
+    record = {
+        "filename": original_filename,
+        "filePath": display_path(destination),
+        "fileUrl": _media_url(display_path(destination)),
+        "sourceUrl": url,
+        "uploadedAt": now,
+        "durationSeconds": metrics.get("durationSeconds"),
+        "integratedLufs": metrics.get("integratedLufs"),
+        "truePeakDbfs": metrics.get("truePeakDbfs"),
+    }
+
+    data = store.load()
+    project = _find_project(data, project_id)
+    settings = _ensure_mastering_settings(project)
+    settings["reference"] = record
+    settings["updatedAt"] = now
+    project["updatedAt"] = now
+    store.save(data)
+
+    if previous and previous.get("filePath") and previous.get("filename") != original_filename:
+        try:
+            old_path = resolve_stored_file_path(previous["filePath"])
+            if old_path.exists():
+                old_path.unlink()
+        except Exception:
+            pass
+
+    append_project_log(project_subdirs(project_id)["logs"], f"Reference track '{original_filename}' imported from URL for mastering match.")
     return Project(**project)
 
 

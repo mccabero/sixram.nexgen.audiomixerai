@@ -9,6 +9,7 @@ imageio-ffmpeg==0.6.0
 librosa==0.11.0
 noisereduce==3.0.3
 sounddevice==0.5.5
+yt-dlp==2025.10.22
 # Optional upgrade: pyworld enables WORLD-vocoder formant-preserving pitch
 # correction (best quality). Needs MSVC build tools on Windows; the built-in
 # spectral-envelope fallback in audio_engine.py is used when absent.

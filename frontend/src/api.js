@@ -475,6 +475,13 @@ export function uploadMasteringReference(projectId, file) {
   });
 }
 
+export function importMasteringReferenceFromUrl(projectId, url) {
+  return request(`/projects/${projectId}/mastering-reference/url`, {
+    method: "POST",
+    body: JSON.stringify({ url }),
+  });
+}
+
 export function removeMasteringReference(projectId) {
   return request(`/projects/${projectId}/mastering-reference`, {
     method: "DELETE",

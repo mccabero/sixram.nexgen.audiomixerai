@@ -80,6 +80,10 @@ class UpdateMasteringControlsRequest(BaseModel):
     matchReferenceLoudness: bool | None = None
 
 
+class ImportMasteringReferenceUrlRequest(BaseModel):
+    url: str = Field(min_length=1, max_length=2048)
+
+
 class GenerateMasterRequest(BaseModel):
     selectedMixVersionId: str
     preset: str

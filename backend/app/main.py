@@ -13,6 +13,7 @@ from .models import (
     ExportFile,
     ExportMixRequest,
     GenerateMasterRequest,
+    ImportMasteringReferenceUrlRequest,
     MasterVersion,
     MixVersion,
     ProcessingJob,
@@ -81,6 +82,7 @@ from .phase6 import (
     export_mix_without_mastering,
     generate_master,
     get_mastering_presets,
+    import_mastering_reference_from_url,
     remove_mastering_reference,
     run_mastering_job,
     update_mastering_controls,
@@ -592,6 +594,11 @@ def api_update_mastering_controls(project_id: str, payload: UpdateMasteringContr
 @app.post("/api/projects/{project_id}/mastering-reference", response_model=Project)
 async def api_upload_mastering_reference(project_id: str, file: UploadFile = File(...)) -> Project:
     return await upload_mastering_reference(project_id, file)
+
+
+@app.post("/api/projects/{project_id}/mastering-reference/url", response_model=Project)
+def api_import_mastering_reference_url(project_id: str, payload: ImportMasteringReferenceUrlRequest) -> Project:
+    return import_mastering_reference_from_url(project_id, payload)
 
 
 @app.delete("/api/projects/{project_id}/mastering-reference", response_model=Project)
