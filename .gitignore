@@ -1,9 +1,16 @@
 backend/.venv/
 frontend/node_modules/
 frontend/dist/
-storage/app_data.json
-storage/projects/
-storage/server-logs/
+
+# Runtime data. Everything the app writes lives here - projects, splits, chord
+# sheets, downloaded audio. Stems are ~56 MB each, so a single split is around
+# 450 MB; none of it belongs in history. The app creates whatever it needs.
+storage/
+
+# Server pids and logs written by run-backend. These were tracked by mistake
+# and showed up dirty on every run.
+.codex-runtime/
+
 *.pyc
 __pycache__/
 .DS_Store

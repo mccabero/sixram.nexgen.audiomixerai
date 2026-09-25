@@ -907,3 +907,148 @@ def validate_music_key(key: str) -> bool:
 
 def validate_music_scale(scale: str) -> bool:
     return scale in MUSIC_SCALES
+
+# --- Phase 8: Stem Splitter -------------------------------------------------
+
+
+class SplitStem(BaseModel):
+    id: str
+    source: str
+    label: str
+    note: str = ""
+    color: str = "#94a3b8"
+    quality: str = "good"
+    fileName: str
+    filePath: str
+    previewPath: str | None = None
+    peakDb: float = -99.0
+    rmsDb: float = -99.0
+    order: int = 0
+
+
+class SplitJob(BaseModel):
+    id: str
+    splitId: str
+    status: str
+    progress: int = 0
+    message: str | None = None
+    cancelRequested: bool = False
+    createdAt: str
+    updatedAt: str
+
+
+class Split(BaseModel):
+    id: str
+    url: str
+    videoId: str | None = None
+    title: str
+    uploader: str | None = None
+    durationSeconds: float = 0.0
+    stemSet: str = "6"
+    depth: str = "standard"
+    modelName: str
+    status: str
+    createdAt: str
+    updatedAt: str
+    completedAt: str | None = None
+    elapsedSeconds: float | None = None
+    error: str | None = None
+    stems: list[SplitStem] = Field(default_factory=list)
+    job: SplitJob | None = None
+
+
+class CreateSplitRequest(BaseModel):
+    url: str
+    stemSet: str = "6"
+    depth: str = "standard"
+
+
+class ExportSplitMixStem(BaseModel):
+    stemId: str
+    gainDb: float = 0.0
+    muted: bool = False
+
+
+class ExportSplitMixRequest(BaseModel):
+    stems: list[ExportSplitMixStem] = Field(default_factory=list)
+    name: str | None = None
+    format: str = "wav"
+
+
+# --- Phase 9: Chord Sheets --------------------------------------------------
+
+
+class ChordSheetJob(BaseModel):
+    id: str
+    sheetId: str
+    status: str
+    progress: int = 0
+    message: str | None = None
+    cancelRequested: bool = False
+    createdAt: str
+    updatedAt: str
+
+
+class ChordSheet(BaseModel):
+    id: str
+    splitId: str
+    url: str = ""
+    videoId: str | None = None
+    title: str
+    uploader: str | None = None
+    durationSeconds: float = 0.0
+    status: str
+    createdAt: str
+    updatedAt: str
+    completedAt: str | None = None
+    elapsedSeconds: float | None = None
+    error: str | None = None
+    tempo: float | None = None
+    key: str | None = None
+    tuning: str | None = None
+    tuningShift: int = 0
+    referenceCents: float | None = None
+    transpose: int = 0
+    capo: int = 0
+    chordCount: int = 0
+    meanConfidence: float | None = None
+    lowConfidenceRatio: float | None = None
+    lyricsSource: str | None = None
+    lyricsSynced: bool = False
+    lyricLineCount: int = 0
+    job: ChordSheetJob | None = None
+
+
+class CreateChordSheetRequest(BaseModel):
+    """Either an existing split to analyse, or a URL to find or split first."""
+
+    url: str | None = None
+    splitId: str | None = None
+
+
+class UpdateSheetViewRequest(BaseModel):
+    """Transpose, capo and tuning all collapse into one render-time shift."""
+
+    transpose: int = 0
+    capo: int = 0
+    tuningShift: int = 0
+
+
+class UpdateSheetChordRequest(BaseModel):
+    bar: int
+    startSeconds: float
+    label: str
+
+
+class ExportChordSheetRequest(BaseModel):
+    format: str = "chordpro"
+
+
+
+class AttachLyricsRequest(BaseModel):
+    """'auto' asks LRCLIB; 'manual' takes the pasted text as-is."""
+
+    source: str = "auto"
+    text: str | None = None
+    artist: str | None = None
+    track: str | None = None

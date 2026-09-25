@@ -703,6 +703,7 @@ def _remove_project_tree(root: Path) -> None:
 
 
 def _ensure_data_defaults(data: dict[str, Any]) -> None:
+    data.setdefault("splits", [])
     data.setdefault("projects", [])
     data.setdefault("detectionMemory", {"filenamePatterns": {}})
     data["detectionMemory"].setdefault("filenamePatterns", {})

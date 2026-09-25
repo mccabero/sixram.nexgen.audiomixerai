@@ -626,3 +626,134 @@ export function uploadVideoWatermarkLogo(projectId, file, onProgress) {
     xhr.send(formData);
   });
 }
+
+// --- Phase 8: Stem Splitter -------------------------------------------------
+
+export function getSplitEnvironment() {
+  return request("/splits/environment");
+}
+
+export function listSplits() {
+  return request("/splits");
+}
+
+export function createSplit(payload) {
+  return request("/splits", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function getSplit(splitId) {
+  return request(`/splits/${splitId}`);
+}
+
+export function getSplitJob(splitId) {
+  return request(`/splits/${splitId}/job`);
+}
+
+export function cancelSplit(splitId) {
+  return request(`/splits/${splitId}/cancel`, {
+    method: "POST",
+  });
+}
+
+export function deleteSplit(splitId) {
+  return request(`/splits/${splitId}`, {
+    method: "DELETE",
+  });
+}
+
+export function getActiveSplit() {
+  return request("/splits/active");
+}
+
+export function retrySplit(splitId) {
+  return request(`/splits/${splitId}/retry`, {
+    method: "POST",
+  });
+}
+
+export function archiveSplitStems(splitId) {
+  return request(`/splits/${splitId}/archive`, {
+    method: "POST",
+  });
+}
+
+export function exportSplitMix(splitId, payload) {
+  return request(`/splits/${splitId}/exports`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+
+// --- Phase 9: Chord Sheets --------------------------------------------------
+
+export function getChordSheetEnvironment() {
+  return request("/chord-sheets/environment");
+}
+
+export function listChordSheets() {
+  return request("/chord-sheets");
+}
+
+export function createChordSheet(payload) {
+  return request("/chord-sheets", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function getChordSheet(sheetId) {
+  return request(`/chord-sheets/${sheetId}`);
+}
+
+export function getChordSheetAnalysis(sheetId) {
+  return request(`/chord-sheets/${sheetId}/analysis`);
+}
+
+export function cancelChordSheet(sheetId) {
+  return request(`/chord-sheets/${sheetId}/cancel`, {
+    method: "POST",
+  });
+}
+
+export function retryChordSheet(sheetId) {
+  return request(`/chord-sheets/${sheetId}/retry`, {
+    method: "POST",
+  });
+}
+
+export function deleteChordSheet(sheetId) {
+  return request(`/chord-sheets/${sheetId}`, {
+    method: "DELETE",
+  });
+}
+
+export function updateChordSheetView(sheetId, payload) {
+  return request(`/chord-sheets/${sheetId}/view`, {
+    method: "PATCH",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function exportChordSheet(sheetId, format) {
+  return request(`/chord-sheets/${sheetId}/exports`, {
+    method: "POST",
+    body: JSON.stringify({ format }),
+  });
+}
+
+export function attachChordSheetLyrics(sheetId, payload) {
+  return request(`/chord-sheets/${sheetId}/lyrics`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function clearChordSheetLyrics(sheetId) {
+  return request(`/chord-sheets/${sheetId}/lyrics`, {
+    method: "DELETE",
+  });
+}

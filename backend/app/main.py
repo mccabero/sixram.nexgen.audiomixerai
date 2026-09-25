@@ -10,7 +10,14 @@ from .models import (
     CreateVideoBrandingTemplateRequest,
     CreateVocalPresetRequest,
     DirectRecordingStatus,
+    AttachLyricsRequest,
+    ChordSheet,
+    ChordSheetJob,
+    CreateChordSheetRequest,
+    ExportChordSheetRequest,
     ExportFile,
+    UpdateSheetChordRequest,
+    UpdateSheetViewRequest,
     ExportMixRequest,
     GenerateMasterRequest,
     ImportMasteringReferenceUrlRequest,
@@ -132,6 +139,43 @@ from .workflow_reset import (
 )
 
 
+from .models import CreateSplitRequest, ExportSplitMixRequest, Split, SplitJob
+from .stem_splitter import (
+    active_split_summary,
+    archive_split_stems,
+    create_split,
+    delete_split,
+    export_split_mix,
+    get_split,
+    get_split_job,
+    list_splits,
+    mark_interrupted_splits,
+    request_split_cancel,
+    retry_split,
+    run_split,
+    separation_environment,
+)
+from .chord_sheet import (
+    active_chord_sheet_summary,
+    attach_lyrics,
+    clear_lyrics,
+    chord_sheet_environment,
+    create_chord_sheet,
+    delete_chord_sheet,
+    export_chord_sheet,
+    get_analysis,
+    get_chord_sheet,
+    get_chord_sheet_job,
+    list_chord_sheets,
+    mark_interrupted_sheets,
+    request_sheet_cancel,
+    retry_chord_sheet,
+    run_chord_sheet,
+    update_sheet_chord,
+    update_sheet_view,
+)
+
+
 app = FastAPI(title="Local Stem Mixer AI", version="0.1.0")
 AUDIO_ENVIRONMENT: dict = {}
 
@@ -151,6 +195,8 @@ def startup_checks() -> None:
     global AUDIO_ENVIRONMENT
     AUDIO_ENVIRONMENT = check_audio_environment()
     mark_interrupted_jobs()
+    mark_interrupted_splits()
+    mark_interrupted_sheets()
 
 
 @app.get("/")
@@ -648,3 +694,156 @@ def api_delete_masters(project_id: str) -> Project:
 @app.delete("/api/projects/{project_id}/exports", response_model=Project)
 def api_delete_exports(project_id: str) -> Project:
     return delete_exports(project_id)
+
+
+# --- Phase 8: Stem Splitter -------------------------------------------------
+# A standalone module. These routes never touch project state; splits live in
+# their own storage tree and their own slice of app_data.json.
+
+
+@app.get("/api/splits/environment")
+def api_split_environment() -> dict:
+    return separation_environment()
+
+
+@app.get("/api/splits/active")
+def api_active_split() -> dict:
+    return {"active": active_split_summary()}
+
+
+@app.get("/api/splits", response_model=list[Split])
+def api_list_splits() -> list[Split]:
+    return list_splits()
+
+
+@app.post("/api/splits", response_model=Split)
+def api_create_split(payload: CreateSplitRequest, background_tasks: BackgroundTasks) -> Split:
+    split = create_split(payload)
+    # A cached result comes back Ready and needs no worker.
+    if split.status == "Pending":
+        background_tasks.add_task(run_split, split.id)
+    return split
+
+
+@app.get("/api/splits/{split_id}", response_model=Split)
+def api_get_split(split_id: str) -> Split:
+    return get_split(split_id)
+
+
+@app.get("/api/splits/{split_id}/job", response_model=SplitJob)
+def api_get_split_job(split_id: str) -> SplitJob:
+    return get_split_job(split_id)
+
+
+@app.post("/api/splits/{split_id}/cancel", response_model=Split)
+def api_cancel_split(split_id: str) -> Split:
+    return request_split_cancel(split_id)
+
+
+@app.delete("/api/splits/{split_id}")
+def api_delete_split(split_id: str) -> dict:
+    return delete_split(split_id)
+
+
+@app.post("/api/splits/{split_id}/retry", response_model=Split)
+def api_retry_split(split_id: str, background_tasks: BackgroundTasks) -> Split:
+    split = retry_split(split_id)
+    background_tasks.add_task(run_split, split.id)
+    return split
+
+
+@app.post("/api/splits/{split_id}/archive")
+def api_archive_split_stems(split_id: str) -> dict:
+    return archive_split_stems(split_id)
+
+
+@app.post("/api/splits/{split_id}/exports")
+def api_export_split_mix(split_id: str, payload: ExportSplitMixRequest) -> dict:
+    return export_split_mix(split_id, payload)
+
+
+# --- Phase 9: Chord Sheets --------------------------------------------------
+# A consumer of the Phase 8 splitter: a sheet holds a splitId and reads the
+# stems that split already produced. Nothing here touches project state.
+
+
+@app.get("/api/chord-sheets/environment")
+def api_chord_sheet_environment() -> dict:
+    return chord_sheet_environment()
+
+
+@app.get("/api/chord-sheets/active")
+def api_active_chord_sheet() -> dict:
+    return {"active": active_chord_sheet_summary()}
+
+
+@app.get("/api/chord-sheets", response_model=list[ChordSheet])
+def api_list_chord_sheets() -> list[ChordSheet]:
+    return list_chord_sheets()
+
+
+@app.post("/api/chord-sheets", response_model=ChordSheet)
+def api_create_chord_sheet(payload: CreateChordSheetRequest, background_tasks: BackgroundTasks) -> ChordSheet:
+    sheet = create_chord_sheet(payload)
+    # An existing sheet for the same split comes back Ready and needs no worker.
+    if sheet.status == "Pending":
+        background_tasks.add_task(run_chord_sheet, sheet.id)
+    return sheet
+
+
+@app.get("/api/chord-sheets/{sheet_id}", response_model=ChordSheet)
+def api_get_chord_sheet(sheet_id: str) -> ChordSheet:
+    return get_chord_sheet(sheet_id)
+
+
+@app.get("/api/chord-sheets/{sheet_id}/job", response_model=ChordSheetJob)
+def api_get_chord_sheet_job(sheet_id: str) -> ChordSheetJob:
+    return get_chord_sheet_job(sheet_id)
+
+
+@app.get("/api/chord-sheets/{sheet_id}/analysis")
+def api_get_chord_sheet_analysis(sheet_id: str) -> dict:
+    return get_analysis(sheet_id)
+
+
+@app.post("/api/chord-sheets/{sheet_id}/cancel", response_model=ChordSheet)
+def api_cancel_chord_sheet(sheet_id: str) -> ChordSheet:
+    return request_sheet_cancel(sheet_id)
+
+
+@app.post("/api/chord-sheets/{sheet_id}/retry", response_model=ChordSheet)
+def api_retry_chord_sheet(sheet_id: str, background_tasks: BackgroundTasks) -> ChordSheet:
+    sheet = retry_chord_sheet(sheet_id)
+    background_tasks.add_task(run_chord_sheet, sheet.id)
+    return sheet
+
+
+@app.delete("/api/chord-sheets/{sheet_id}")
+def api_delete_chord_sheet(sheet_id: str) -> dict:
+    return delete_chord_sheet(sheet_id)
+
+
+@app.patch("/api/chord-sheets/{sheet_id}/view")
+def api_update_chord_sheet_view(sheet_id: str, payload: UpdateSheetViewRequest) -> dict:
+    return update_sheet_view(sheet_id, payload.transpose, payload.capo, payload.tuningShift)
+
+
+@app.patch("/api/chord-sheets/{sheet_id}/chord")
+def api_update_chord_sheet_chord(sheet_id: str, payload: UpdateSheetChordRequest) -> dict:
+    return update_sheet_chord(sheet_id, payload.bar, payload.startSeconds, payload.label)
+
+
+@app.post("/api/chord-sheets/{sheet_id}/exports")
+def api_export_chord_sheet(sheet_id: str, payload: ExportChordSheetRequest) -> dict:
+    return export_chord_sheet(sheet_id, payload.format)
+
+
+
+@app.post("/api/chord-sheets/{sheet_id}/lyrics")
+def api_attach_chord_sheet_lyrics(sheet_id: str, payload: AttachLyricsRequest) -> dict:
+    return attach_lyrics(sheet_id, payload.source, payload.text, payload.artist, payload.track)
+
+
+@app.delete("/api/chord-sheets/{sheet_id}/lyrics")
+def api_clear_chord_sheet_lyrics(sheet_id: str) -> dict:
+    return clear_lyrics(sheet_id)

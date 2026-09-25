@@ -4,6 +4,7 @@ import { Link, useLocation } from "react-router-dom";
 import {
   abandonProcessingJob,
   cancelProcessingJob,
+  getActiveSplit,
   getProject,
   startAdvancedMix,
   startAnalysis,
@@ -28,6 +29,27 @@ export default function GlobalJobStatus() {
   const [retrying, setRetrying] = useState(false);
   const [stopping, setStopping] = useState(false);
   const [dismissed, setDismissed] = useState(() => new Set(readDismissedJobs()));
+  const [activeSplit, setActiveSplit] = useState(null);
+
+  // A split takes minutes and is not tied to a project, so it has to stay
+  // visible from anywhere in the app - not just the splitter page.
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const payload = await getActiveSplit();
+        if (!cancelled) setActiveSplit(payload?.active || null);
+      } catch {
+        if (!cancelled) setActiveSplit(null);
+      }
+    };
+    load();
+    const timer = window.setInterval(load, 4000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, []);
 
   const loadProject = async () => {
     if (!projectId) return;
@@ -64,7 +86,9 @@ export default function GlobalJobStatus() {
   }, [projectId]);
 
   const visibleJob = useMemo(() => selectVisibleJob(project, dismissed), [project, dismissed]);
-  if (!projectId || (!visibleJob && !error)) return null;
+  // On the splitter itself the progress is already on screen, so don't repeat it.
+  const splitBanner = location.pathname.startsWith("/stem-splitter") ? null : activeSplit;
+  if (!splitBanner && (!projectId || (!visibleJob && !error))) return null;
 
   const stale = visibleJob && runningStatuses.has(visibleJob.status) && isStaleJob(visibleJob);
   const failed = visibleJob?.status === "Failed";
@@ -121,6 +145,38 @@ export default function GlobalJobStatus() {
   return (
     <div className="border-b border-white/10 bg-zinc-950/62 backdrop-blur-xl">
       <div className="mx-auto max-w-[1760px] px-4 py-3 sm:px-6 lg:px-8">
+        {splitBanner ? (
+          <section className="mb-2 rounded-lg border border-teal-300/20 bg-teal-300/10 px-4 py-3">
+            <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+              <div className="flex min-w-0 flex-1 items-start gap-3">
+                <span className="mt-0.5 grid h-10 w-10 shrink-0 place-items-center rounded-lg border border-teal-300/20 bg-black/25 text-teal-100">
+                  <LoaderCircle size={18} className="animate-spin" />
+                </span>
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+                    <h2 className="truncate font-semibold text-teal-50">
+                      Splitting stems: {splitBanner.title}
+                    </h2>
+                    <span className="text-sm font-semibold text-zinc-200">
+                      {Math.round(splitBanner.progress || 0)}%
+                    </span>
+                  </div>
+                  <p className="mt-1 line-clamp-2 text-sm leading-6 text-zinc-300">{splitBanner.message}</p>
+                  <div className="mt-3 h-2 overflow-hidden rounded-full bg-black/40">
+                    <div
+                      className="h-full rounded-full bg-gradient-to-r from-teal-200 to-emerald-200 transition-all"
+                      style={{ width: `${Math.max(0, Math.min(100, splitBanner.progress || 0))}%` }}
+                    />
+                  </div>
+                </div>
+              </div>
+              <Button as={Link} to="/stem-splitter" variant="secondary" className="sm:w-auto">
+                Open
+              </Button>
+            </div>
+          </section>
+        ) : null}
+
         {error && !visibleJob ? (
           <div className="rounded-lg border border-amber-300/20 bg-amber-300/10 px-3 py-2 text-sm text-amber-100">{error}</div>
         ) : null}

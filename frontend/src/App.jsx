@@ -7,6 +7,9 @@ import ExportPage from "./pages/ExportPage.jsx";
 import MixerPage from "./pages/MixerPage.jsx";
 import ProjectDetail from "./pages/ProjectDetail.jsx";
 import SectionPlaceholder from "./pages/SectionPlaceholder.jsx";
+import StemPlayerPage from "./pages/StemPlayerPage.jsx";
+import ChordSheetPage from "./pages/ChordSheetPage.jsx";
+import StemSplitterPage from "./pages/StemSplitterPage.jsx";
 import UploadStems from "./pages/UploadStems.jsx";
 import VideoEditorPage from "./pages/VideoEditorPage.jsx";
 import VocalEnhancerPage from "./pages/VocalEnhancerPage.jsx";
@@ -26,6 +29,9 @@ export default function App() {
         <Route path="projects/:projectId/export" element={<ExportPage />} />
         <Route path="projects/:projectId/video-editor" element={<VideoEditorPage />} />
         <Route path="projects/:projectId/:section" element={<SectionPlaceholder />} />
+        <Route path="stem-splitter" element={<StemSplitterPage />} />
+        <Route path="stem-splitter/:splitId" element={<StemPlayerPage />} />
+        <Route path="chord-sheets/:sheetId" element={<ChordSheetPage />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>
     </Routes>

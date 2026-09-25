@@ -1,0 +1,14 @@
+# Optional dependencies for the Stem Splitter module (Phase 8).
+#
+# Deliberately NOT in requirements.txt: the backend must keep starting and
+# the mix/master pipeline must keep working even if these are absent or the
+# install fails. Without them the splitter endpoints answer 503 and the
+# Stem Splitter page shows install instructions.
+#
+# Install (Windows, from the repo root):
+#   backend\.venv\Scripts\python.exe -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+#   backend\.venv\Scripts\python.exe -m pip install -r backend\requirements-splitter.txt
+#
+# Install torch first, from the CPU index, or pip pulls the much larger CUDA build.
+
+demucs==4.1.0

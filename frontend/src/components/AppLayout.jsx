@@ -1,6 +1,6 @@
 import { CircleHelp, Mic2, MoonStar, SlidersHorizontal, Sparkles, SunMedium, X } from "lucide-react";
 import { useEffect, useState } from "react";
-import { Link, Outlet } from "react-router-dom";
+import { Link, NavLink, Outlet } from "react-router-dom";
 import sixramLogo from "../assets/sixram-band-studio-logo.png";
 import { applyDocumentTheme, persistTheme, readStoredTheme } from "../utils/theme.js";
 import Button from "./Button.jsx";
@@ -47,6 +47,27 @@ export default function AppLayout() {
               <span className="block truncate text-lg font-semibold text-white">Studio Pilot AI</span>
             </span>
           </Link>
+          <nav className="hidden items-center gap-1.5 md:flex">
+            {[
+              { to: "/", label: "Projects", end: true },
+              { to: "/stem-splitter", label: "Stem Splitter", end: false },
+            ].map((item) => (
+              <NavLink
+                key={item.to}
+                to={item.to}
+                end={item.end}
+                className={({ isActive }) =>
+                  `inline-flex min-h-11 items-center rounded-lg border px-4 text-sm font-semibold transition ${
+                    isActive
+                      ? "border-teal-300/45 bg-teal-300/[0.12] text-teal-100"
+                      : "border-white/10 bg-white/[0.06] text-zinc-300 hover:text-white"
+                  }`
+                }
+              >
+                {item.label}
+              </NavLink>
+            ))}
+          </nav>
           <div className="flex shrink-0 items-center gap-2">
             <Button
               type="button"
