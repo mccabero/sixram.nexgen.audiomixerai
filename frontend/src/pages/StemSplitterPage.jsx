@@ -408,7 +408,7 @@ export default function StemSplitterPage() {
           <h2 className="text-[15px] font-semibold text-white">Playlist batches</h2>
           {batches.map((batch) => {
             const active = ACTIVE_BATCH_STATUSES.has(batch.status);
-            const done = batch.items.filter((item) => item.splitStatus === "Completed").length;
+            const done = batch.items.filter((item) => item.splitStatus === "Ready").length;
             const fetched = batch.items.filter((item) => item.fetchStatus === "Fetched").length;
             const busy = batchBusy === batch.id;
             return (
@@ -464,23 +464,27 @@ export default function StemSplitterPage() {
                       <span className="min-w-0 flex-grow truncate text-zinc-300">{item.title}</span>
                       <span className="shrink-0 text-zinc-500">{formatDuration(item.durationSeconds)}</span>
                       <span
-                        className={`w-24 shrink-0 text-right font-semibold ${
-                          item.splitStatus === "Completed"
-                            ? "text-teal-200"
+                        className={`w-28 shrink-0 text-right font-semibold ${
+                          item.splitStatus === "Ready"
+                            ? item.reused
+                              ? "text-zinc-400"
+                              : "text-teal-200"
                             : item.fetchStatus === "Failed" || item.splitStatus === "Failed"
                               ? "text-rose-200"
                               : "text-zinc-500"
                         }`}
-                        title={item.fetchError || item.splitError || ""}
+                        title={item.fetchError || item.splitError || (item.reused ? "Already split; reused what is on disk." : "")}
                       >
                         {item.fetchStatus === "Failed"
                           ? "No audio"
-                          : item.splitStatus === "Completed"
-                            ? "Split"
+                          : item.splitStatus === "Ready"
+                            ? item.reused
+                              ? "Already split"
+                              : "Split"
                             : item.splitStatus === "Separating"
                               ? "Separating"
                               : item.fetchStatus === "Fetched"
-                                ? "Ready"
+                                ? "Queued"
                                 : item.fetchStatus}
                       </span>
                     </li>

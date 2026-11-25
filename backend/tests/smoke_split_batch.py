@@ -59,7 +59,9 @@ def fake_run_split(split_id):
     splits_run.append(split_id)
     failed = split_id in fail_split_for
     def apply(split):
-        split["status"] = "Failed" if failed else "Completed"
+        # run_split marks a finished split "Ready" - the stub has to agree
+        # with the real contract or it hides exactly the bug it should catch.
+        split["status"] = "Failed" if failed else "Ready"
         split["error"] = "separation blew up" if failed else None
     ss._mutate_split(split_id, apply)
 
@@ -85,7 +87,7 @@ check("every track downloaded before any split ran",
 check("fetch happened before split (two-phase)", len(downloads) == 3 and len(splits_run) == 3)
 check("all tracks split", len(splits_run) == 3, f"{len(splits_run)} splits")
 check("batch Completed", after.status == "Completed", after.status)
-check("items report Completed", all(i.splitStatus == "Completed" for i in after.items))
+check("items report Ready", all(i.splitStatus == "Ready" for i in after.items))
 
 # ---- 2. resume skips work already done -----------------------------------
 downloads.clear(); splits_run.clear()
@@ -144,7 +146,39 @@ after6 = ss.get_split_batch(b4.id)
 check("resume finishes the remaining tracks", len(splits_run) == 2, f"{len(splits_run)} splits")
 check("batch completes after resume", after6.status == "Completed", after6.status)
 
-# ---- 7. one batch at a time ---------------------------------------------
+# ---- 7. re-running a playlist skips what is already split ----------------
+downloads.clear(); splits_run.clear()
+
+# _find_cached_split only reuses a split whose stem files still exist, so
+# the fixture has to put them there.
+import app.stem_splitter as _ss
+for split in store.load()["splits"]:
+    if split.get("status") != "Ready":
+        continue
+    stem_dir = _ss.SPLITS_ROOT / split["id"] / "stems"
+    stem_dir.mkdir(parents=True, exist_ok=True)
+    (stem_dir / "vocals.wav").write_bytes(b"stem")
+    def mark(item, s=split):
+        item["stems"] = [{"fileName": "vocals.wav"}]
+    ss._mutate_split(split["id"], mark)
+
+b5 = ss.create_split_batch(CreateSplitBatchRequest(url="https://youtube.com/playlist?list=X", stemSet="4"))
+reused_items = [i for i in b5.items if i.reused]
+check("a re-run reuses tracks already on disk", len(reused_items) == 3, f"{len(reused_items)} reused")
+check("reused items are already Ready", all(i.splitStatus == "Ready" for i in reused_items))
+check("the batch says so up front", "already split" in (b5.progressMessage or ""), b5.progressMessage)
+
+ss.run_split_batch(b5.id)
+check("a re-run downloads nothing", downloads == [], f"{len(downloads)} downloads")
+check("a re-run separates nothing", splits_run == [], f"{len(splits_run)} splits")
+check("the re-run completes", ss.get_split_batch(b5.id).status == "Completed", ss.get_split_batch(b5.id).status)
+
+# A different stem set is different output, so it must NOT be skipped.
+b6 = ss.create_split_batch(CreateSplitBatchRequest(url="https://youtube.com/playlist?list=X", stemSet="6"))
+check("a different stem set is not treated as already split",
+      not any(i.reused for i in b6.items), f"{sum(1 for i in b6.items if i.reused)} wrongly reused")
+
+# ---- 8. one batch at a time ---------------------------------------------
 def apply2(b): b["status"] = "Splitting"
 ss._mutate_batch(b4.id, apply2)
 try:

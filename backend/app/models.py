@@ -1002,6 +1002,9 @@ class SplitBatchItem(BaseModel):
     fetchError: str | None = None
     splitStatus: str = "Pending"
     splitError: str | None = None
+    # True when this track was already separated at this stem set and depth and
+    # the batch pointed at the existing split instead of redoing the work.
+    reused: bool = False
 
 
 class SplitBatch(BaseModel):

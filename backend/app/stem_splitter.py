@@ -1155,8 +1155,42 @@ def create_split_batch(payload: CreateSplitBatchRequest) -> SplitBatch:
         if running:
             raise HTTPException(status_code=409, detail="A batch is already running. Let it finish or cancel it first.")
 
+        reused = 0
+        seen: dict[str, str] = {}
+
         for track in tracks:
+            video_id = _extract_video_id(track["url"])
+
+            # Already separated at this stem set and depth, with the stem
+            # files still on disk? Point at it instead of doing the work
+            # again. _find_cached_split checks the files exist, so a split
+            # whose output was deleted is not wrongly skipped.
+            cached = _find_cached_split(data, video_id, stem_set, depth)
+            if cached is None and video_id and video_id in seen:
+                # The same video twice in one playlist.
+                cached = _find_split(data, seen[video_id])
+
+            if cached is not None:
+                reused += 1
+                items.append(
+                    {
+                        "splitId": cached["id"],
+                        "url": track["url"],
+                        "title": cached.get("title") or track["title"],
+                        "position": track["position"],
+                        "durationSeconds": float(cached.get("durationSeconds") or track["durationSeconds"]),
+                        "fetchStatus": "Fetched",
+                        "fetchError": None,
+                        "splitStatus": cached.get("status", "Ready"),
+                        "splitError": None,
+                        "reused": True,
+                    }
+                )
+                continue
+
             split_id = uuid.uuid4().hex
+            if video_id:
+                seen[video_id] = split_id
             # "Queued" deliberately sits outside ACTIVE_SPLIT_STATUSES: these
             # splits exist from the moment the batch is created, and must not
             # trip the one-at-a-time guard that create_split enforces.
@@ -1201,6 +1235,7 @@ def create_split_batch(payload: CreateSplitBatchRequest) -> SplitBatch:
                     "fetchError": None,
                     "splitStatus": "Pending",
                     "splitError": None,
+                    "reused": False,
                 }
             )
 
@@ -1212,7 +1247,11 @@ def create_split_batch(payload: CreateSplitBatchRequest) -> SplitBatch:
             "depth": depth,
             "modelName": model_name,
             "status": "Pending",
-            "progressMessage": f"{len(items)} tracks queued.",
+            "progressMessage": (
+                f"{len(items)} tracks queued, {reused} already split."
+                if reused
+                else f"{len(items)} tracks queued."
+            ),
             "cancelRequested": False,
             "createdAt": now,
             "updatedAt": now,
@@ -1224,7 +1263,8 @@ def create_split_batch(payload: CreateSplitBatchRequest) -> SplitBatch:
         store.save(data)
 
     for item in items:
-        ensure_split_dirs(item["splitId"])
+        if not item.get("reused"):
+            ensure_split_dirs(item["splitId"])
 
     return SplitBatch(**batch)
 
@@ -1340,8 +1380,11 @@ def run_split_batch(batch_id: str) -> None:
             with _SPLIT_LOCK:
                 data = store.load()
                 status = _find_split(data, split_id).get("status")
-            if status == "Completed":
-                _update_batch_item(batch_id, split_id, {"splitStatus": "Completed"})
+            # run_split marks a finished split "Ready"; the job inside it is
+            # what goes to "Completed". Using the wrong one here would
+            # re-separate every track on a resume.
+            if status == "Ready":
+                _update_batch_item(batch_id, split_id, {"splitStatus": "Ready"})
                 continue
 
             _set_batch_status(
@@ -1365,15 +1408,19 @@ def run_split_batch(batch_id: str) -> None:
         with _SPLIT_LOCK:
             data = store.load()
             items = deepcopy(_find_batch(data, batch_id)["items"])
-        done = sum(1 for item in items if item.get("splitStatus") == "Completed")
+        done = sum(1 for item in items if item.get("splitStatus") == "Ready")
         failed = len(items) - done
 
         def finish(batch: dict[str, Any]) -> None:
             batch["status"] = "Completed" if failed == 0 else "Partial"
             batch["completedAt"] = utc_now_iso()
             batch["cancelRequested"] = False
+            skipped = sum(1 for item in items if item.get("reused"))
+            suffix = f" {skipped} were already on disk." if skipped else ""
             batch["progressMessage"] = (
-                f"{done} of {len(items)} tracks split." if failed else f"All {done} tracks split."
+                f"{done} of {len(items)} tracks split.{suffix}"
+                if failed
+                else f"All {done} tracks split.{suffix}"
             )
 
         _mutate_batch(batch_id, finish)
