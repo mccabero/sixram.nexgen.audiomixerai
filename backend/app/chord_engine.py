@@ -419,8 +419,8 @@ def decode_chords(
     )
 
     _tick(progress, 0.65, "Decoding chords...")
-    beat_chroma = librosa.util.sync(chroma, beats, aggregate=np.median)
-    beat_bass = librosa.util.sync(bass_chroma, beats, aggregate=np.median)
+    beat_chroma = librosa.util.sync(chroma, beats, aggregate=np.median, pad=False)
+    beat_bass = librosa.util.sync(bass_chroma, beats, aggregate=np.median, pad=False)
     beat_times = librosa.frames_to_time(beats, sr=ANALYSIS_SR, hop_length=ANALYSIS_HOP)
 
     templates = build_templates()

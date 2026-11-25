@@ -65,7 +65,7 @@ export default function StemSplitterPage() {
   const [environment, setEnvironment] = useState(null);
   const [url, setUrl] = useState("");
   const [stemSet, setStemSet] = useState("6");
-  const [deep, setDeep] = useState(false);
+  const [deep, setDeep] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
@@ -251,7 +251,7 @@ export default function StemSplitterPage() {
 
         <fieldset className="flex flex-col gap-2">
           <legend className="text-xs font-semibold uppercase tracking-[0.14em] text-zinc-400">Stem set</legend>
-          <div className="flex flex-wrap gap-2.5">
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
             {STEM_SETS.map((option) => (
               <label
                 key={option.value}

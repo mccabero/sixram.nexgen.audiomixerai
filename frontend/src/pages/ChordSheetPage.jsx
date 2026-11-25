@@ -114,11 +114,11 @@ export default function ChordSheetPage() {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState("");
-  const [tab, setTab] = useState("chart");
   const [pasting, setPasting] = useState(false);
   const [pasteText, setPasteText] = useState("");
   const [lyricBusy, setLyricBusy] = useState(false);
   const timerRef = useRef(null);
+  const autoFetchedRef = useRef(false);
 
   const load = useCallback(async () => {
     try {
@@ -156,6 +156,15 @@ export default function ChordSheetPage() {
     };
   }, [sheet, load]);
 
+  // Auto-find lyrics the first time analysis loads and no lyrics exist yet.
+  useEffect(() => {
+    if (!analysis || (analysis.lyricRows ?? []).length > 0 || autoFetchedRef.current) return;
+    autoFetchedRef.current = true;
+    onFindLyrics();
+    // onFindLyrics is stable across renders; analysis is the trigger.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [analysis]);
+
   // Transpose, capo and tuning are a re-spelling on the server, never a
   // re-analysis, so they come back immediately.
   const applyView = useCallback(
@@ -187,7 +196,6 @@ export default function ChordSheetPage() {
         setPasting(true);
       } else {
         setAnalysis(result);
-        setTab("lyrics");
         await load();
       }
     } catch (exc) {
@@ -205,7 +213,6 @@ export default function ChordSheetPage() {
       setAnalysis(await attachChordSheetLyrics(sheetId, { source: "manual", text: pasteText }));
       setPasting(false);
       setPasteText("");
-      setTab("lyrics");
       await load();
     } catch (exc) {
       setError(exc.message);
@@ -218,7 +225,6 @@ export default function ChordSheetPage() {
     setError("");
     try {
       setAnalysis(await clearChordSheetLyrics(sheetId));
-      setTab("chart");
       await load();
     } catch (exc) {
       setError(exc.message);
@@ -249,7 +255,6 @@ export default function ChordSheetPage() {
   const summary = analysis?.summary ?? {};
   const lyricRows = analysis?.lyricRows ?? [];
   const hasLyrics = lyricRows.length > 0;
-  const shown = hasLyrics && tab === "lyrics" ? "lyrics" : "chart";
 
   return (
     <div className="flex flex-col gap-4">
@@ -260,16 +265,16 @@ export default function ChordSheetPage() {
         </Link>
       </div>
 
-      <div className="flex flex-wrap items-start gap-4">
-        <div className="min-w-0 flex-grow">
-          <h1 className="truncate text-[22px] font-bold tracking-tight text-zinc-50">{sheet.title}</h1>
+      <div className="flex flex-col gap-2">
+        <div>
+          <h1 className="text-[22px] font-bold leading-tight tracking-tight text-zinc-50">{sheet.title}</h1>
           <p className="mt-1 text-[12px] text-zinc-500">
             {formatTime(sheet.durationSeconds)}
             {sheet.elapsedSeconds ? ` · analysed in ${sheet.elapsedSeconds}s` : ""}
             {analysis?.stemsUsed?.length ? ` · ${analysis.stemsUsed.join(" + ")}` : ""}
           </p>
         </div>
-        <div className="flex shrink-0 items-center gap-2">
+        <div className="flex flex-wrap gap-2">
           {sheet.status === "Ready" ? (
             <>
               <Button type="button" variant="secondary" onClick={() => onExport("chordpro")}>
@@ -326,8 +331,9 @@ export default function ChordSheetPage() {
 
       {analysis ? (
         <>
-          <div className="flex flex-wrap items-stretch gap-2.5">
-            <div className="flex items-center gap-5 rounded-xl border border-white/10 bg-white/[0.04] px-5 py-3">
+          <div className="flex flex-col gap-2">
+            {/* Key / Tempo / Reference */}
+            <div className="flex items-center gap-4 rounded-xl border border-white/10 bg-white/[0.04] px-4 py-3 sm:gap-5 sm:px-5">
               <Metric label="Key" value={view?.readingKey || analysis.key?.key} />
               <div className="w-px self-stretch bg-white/10" />
               <Metric label="Tempo" value={`${analysis.tempo} BPM`} />
@@ -339,53 +345,59 @@ export default function ChordSheetPage() {
               />
             </div>
 
-            <div className="flex items-center gap-2 rounded-xl border border-white/10 bg-white/[0.04] px-4 py-2.5">
-              <span className="text-[10.5px] font-bold uppercase tracking-[0.1em] text-zinc-500">Transpose</span>
-              <button
-                type="button"
-                aria-label="Transpose down one semitone"
-                disabled={busy || transpose <= -11}
-                onClick={() => applyView({ transpose: transpose - 1, capo, tuningShift })}
-                className="grid h-9 w-9 place-items-center rounded-lg border border-white/12 bg-white/[0.05] text-base font-bold text-zinc-200 hover:bg-white/[0.1] disabled:opacity-40"
-              >
-                &minus;
-              </button>
-              <span className="min-w-7 text-center text-[15px] font-bold tabular-nums text-zinc-50">
-                {transpose > 0 ? `+${transpose}` : transpose}
-              </span>
-              <button
-                type="button"
-                aria-label="Transpose up one semitone"
-                disabled={busy || transpose >= 11}
-                onClick={() => applyView({ transpose: transpose + 1, capo, tuningShift })}
-                className="grid h-9 w-9 place-items-center rounded-lg border border-white/12 bg-white/[0.05] text-base font-bold text-zinc-200 hover:bg-white/[0.1] disabled:opacity-40"
-              >
-                +
-              </button>
+            {/* Transpose + Capo */}
+            <div className="flex flex-col gap-3 rounded-xl border border-white/10 bg-white/[0.04] px-4 py-3 sm:flex-row sm:items-center sm:gap-2 sm:py-2.5">
+              <div className="flex items-center gap-2">
+                <span className="w-20 shrink-0 text-[10.5px] font-bold uppercase tracking-[0.1em] text-zinc-500 sm:w-auto">Transpose</span>
+                <button
+                  type="button"
+                  aria-label="Transpose down one semitone"
+                  disabled={busy || transpose <= -11}
+                  onClick={() => applyView({ transpose: transpose - 1, capo, tuningShift })}
+                  className="grid h-9 w-9 place-items-center rounded-lg border border-white/12 bg-white/[0.05] text-base font-bold text-zinc-200 hover:bg-white/[0.1] disabled:opacity-40"
+                >
+                  &minus;
+                </button>
+                <span className="min-w-7 text-center text-[15px] font-bold tabular-nums text-zinc-50">
+                  {transpose > 0 ? `+${transpose}` : transpose}
+                </span>
+                <button
+                  type="button"
+                  aria-label="Transpose up one semitone"
+                  disabled={busy || transpose >= 11}
+                  onClick={() => applyView({ transpose: transpose + 1, capo, tuningShift })}
+                  className="grid h-9 w-9 place-items-center rounded-lg border border-white/12 bg-white/[0.05] text-base font-bold text-zinc-200 hover:bg-white/[0.1] disabled:opacity-40"
+                >
+                  +
+                </button>
+              </div>
 
-              <div className="mx-1 h-6 w-px bg-white/10" />
+              <div className="hidden sm:mx-1 sm:block sm:h-6 sm:w-px sm:bg-white/10" />
 
-              <label htmlFor="capo" className="text-[10.5px] font-bold uppercase tracking-[0.1em] text-zinc-500">
-                Capo
-              </label>
-              <select
-                id="capo"
-                value={capo}
-                disabled={busy}
-                onChange={(event) => applyView({ transpose, capo: Number(event.target.value), tuningShift })}
-                className="min-h-9 rounded-lg border border-white/12 bg-[#121318] px-2.5 py-1 text-sm font-semibold text-zinc-200"
-              >
-                <option value={0}>None</option>
-                {[1, 2, 3, 4, 5, 6, 7].map((fret) => (
-                  <option key={fret} value={fret}>
-                    Fret {fret}
-                  </option>
-                ))}
-              </select>
+              <div className="flex items-center gap-2">
+                <label htmlFor="capo" className="w-20 shrink-0 text-[10.5px] font-bold uppercase tracking-[0.1em] text-zinc-500 sm:w-auto">
+                  Capo
+                </label>
+                <select
+                  id="capo"
+                  value={capo}
+                  disabled={busy}
+                  onChange={(event) => applyView({ transpose, capo: Number(event.target.value), tuningShift })}
+                  className="flex-1 min-h-9 rounded-lg border border-white/12 bg-[#121318] px-2.5 py-1 text-sm font-semibold text-zinc-200 sm:flex-none"
+                >
+                  <option value={0}>None</option>
+                  {[1, 2, 3, 4, 5, 6, 7].map((fret) => (
+                    <option key={fret} value={fret}>
+                      Fret {fret}
+                    </option>
+                  ))}
+                </select>
+              </div>
             </div>
 
+            {/* Tuning */}
             <div className="flex items-center gap-2 rounded-xl border border-white/10 bg-white/[0.04] px-4 py-2.5">
-              <label htmlFor="tuning" className="text-[10.5px] font-bold uppercase tracking-[0.1em] text-zinc-500">
+              <label htmlFor="tuning" className="w-20 shrink-0 text-[10.5px] font-bold uppercase tracking-[0.1em] text-zinc-500 sm:w-auto">
                 Tuning
               </label>
               <select
@@ -393,7 +405,7 @@ export default function ChordSheetPage() {
                 value={tuningShift}
                 disabled={busy}
                 onChange={(event) => applyView({ transpose, capo, tuningShift: Number(event.target.value) })}
-                className="min-h-9 rounded-lg border border-white/12 bg-[#121318] px-2.5 py-1 text-sm font-semibold text-zinc-200"
+                className="flex-1 min-h-9 rounded-lg border border-white/12 bg-[#121318] px-2.5 py-1 text-sm font-semibold text-zinc-200"
               >
                 {TUNINGS.map((option) => (
                   <option key={option.value} value={option.value}>
@@ -437,61 +449,43 @@ export default function ChordSheetPage() {
             </div>
           ) : null}
 
-          <div className="flex flex-wrap items-center gap-2.5">
-            {hasLyrics ? (
-              <div className="flex items-center rounded-xl border border-white/10 bg-white/[0.04] p-1">
-                <button
-                  type="button"
-                  onClick={() => setTab("chart")}
-                  className={`min-h-8 rounded-lg px-4 py-1.5 text-[13px] font-bold transition ${
-                    shown === "chart" ? "bg-teal-300/[0.14] text-teal-100" : "text-zinc-400 hover:text-white"
-                  }`}
-                >
-                  Chart
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setTab("lyrics")}
-                  className={`min-h-8 rounded-lg px-4 py-1.5 text-[13px] font-bold transition ${
-                    shown === "lyrics" ? "bg-teal-300/[0.14] text-teal-100" : "text-zinc-400 hover:text-white"
-                  }`}
-                >
-                  Lyrics
-                </button>
-              </div>
-            ) : null}
-
-            {hasLyrics ? (
-              <>
-                <span className="text-[12px] text-zinc-500">
-                  {analysis.lyrics?.source === "manual" ? "Pasted" : "From LRCLIB"}
-                  {analysis.lyrics?.synced ? " · timed" : " · untimed"}
-                </span>
-                <button
-                  type="button"
-                  onClick={onClearLyrics}
-                  className="ml-auto inline-flex min-h-8 items-center gap-1.5 rounded-lg border border-white/10 bg-white/[0.05] px-3 py-1.5 text-[12.5px] font-semibold text-zinc-300 hover:bg-white/[0.1]"
-                >
-                  <Trash2 size={14} />
-                  Remove lyrics
-                </button>
-              </>
-            ) : (
-              <>
+          {/* Lyrics controls */}
+          {hasLyrics ? (
+            <div className="flex flex-wrap items-center gap-2.5">
+              <span className="text-[12px] text-zinc-500">
+                {analysis.lyrics?.source === "manual" ? "Pasted" : "From LRCLIB"}
+                {analysis.lyrics?.synced ? " · timed" : " · untimed"}
+              </span>
+              <button
+                type="button"
+                onClick={onClearLyrics}
+                className="inline-flex min-h-8 items-center gap-1.5 rounded-lg border border-white/10 bg-white/[0.05] px-3 py-1.5 text-[12.5px] font-semibold text-zinc-300 hover:bg-white/[0.1]"
+              >
+                <Trash2 size={14} />
+                Remove lyrics
+              </button>
+            </div>
+          ) : lyricBusy ? (
+            <div className="flex items-center gap-2.5 rounded-lg border border-white/10 bg-white/[0.04] px-4 py-3 text-sm text-zinc-300">
+              <Loader2 size={15} className="animate-spin text-teal-300" />
+              Finding lyrics...
+            </div>
+          ) : (
+            <div className="flex flex-col gap-2">
+              <div className="flex flex-wrap gap-2">
                 <Button type="button" variant="secondary" disabled={lyricBusy} onClick={onFindLyrics}>
-                  {lyricBusy ? <Loader2 size={15} className="animate-spin" /> : <Search size={15} />}
+                  <Search size={15} />
                   Find lyrics
                 </Button>
                 <Button type="button" variant="secondary" disabled={lyricBusy} onClick={() => setPasting((on) => !on)}>
                   Paste lyrics
                 </Button>
-                <span className="text-[12px] text-zinc-500">
-                  Looked up on LRCLIB by title and length. No match is normal for local or unreleased tracks - paste
-                  them instead.
-                </span>
-              </>
-            )}
-          </div>
+              </div>
+              <p className="text-[12px] leading-5 text-zinc-500">
+                Looked up on LRCLIB by title and length. No match is normal for local or unreleased tracks — paste them instead.
+              </p>
+            </div>
+          )}
 
           {pasting && !hasLyrics ? (
             <div className="rounded-xl border border-white/10 bg-white/[0.03] px-5 py-4">
@@ -518,8 +512,9 @@ export default function ChordSheetPage() {
             </div>
           ) : null}
 
-          {shown === "lyrics" ? (
-            <div className="rounded-xl border border-white/10 bg-white/[0.025] px-6 py-5">
+          {/* Lyrics with chords */}
+          {hasLyrics ? (
+            <div className="overflow-x-auto rounded-xl border border-white/10 bg-white/[0.025] px-4 py-5 sm:px-6">
               <div className="flex flex-col">
                 {lyricRows.map((row) => (
                   <LyricRow key={row.index} row={row} />
@@ -530,57 +525,11 @@ export default function ChordSheetPage() {
                   <span className="font-mono text-teal-300">Bb</span> confident
                 </span>
                 <span className="inline-flex items-center gap-2">
-                  <span className="border-b border-dotted border-teal-300/55 font-mono text-teal-300/50">Bb</span> check
-                  this
-                </span>
-                <span className="ml-auto">
-                  Chord positions within a line are proportional to time, so they land close rather than exact.
+                  <span className="border-b border-dotted border-teal-300/55 font-mono text-teal-300/50">Bb</span> check this
                 </span>
               </div>
             </div>
-          ) : (
-          <div className="rounded-xl border border-white/10 bg-white/[0.025] px-6 py-5">
-            <div className="flex flex-col gap-1.5 font-mono text-[15px] leading-relaxed">
-              {(analysis.chart || []).map((row) => (
-                <div key={row.row} className="flex items-center gap-3">
-                  <span className="w-10 shrink-0 text-right text-[11px] tabular-nums text-zinc-600">
-                    {formatTime(row.startSeconds)}
-                  </span>
-                  <div className="flex flex-grow items-stretch border-l border-white/10">
-                    {row.bars.map((bar) => (
-                      <div
-                        key={bar.bar}
-                        className="flex min-w-0 flex-grow basis-0 items-center gap-1.5 border-r border-white/10 px-3 py-1"
-                      >
-                        {bar.held ? (
-                          <span className="text-zinc-700">%</span>
-                        ) : (
-                          bar.chords.map((chord) => <Chord key={`${chord.bar}-${chord.startSeconds}`} chord={chord} />)
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              ))}
-            </div>
-
-            <div className="mt-5 flex flex-wrap items-center gap-5 border-t border-white/[0.07] pt-4 text-[11.5px] text-zinc-500">
-              <span className="inline-flex items-center gap-2">
-                <span className="font-mono text-teal-300">Bb</span> confident
-              </span>
-              <span className="inline-flex items-center gap-2">
-                <span className="border-b border-dotted border-teal-300/55 font-mono text-teal-300/50">Bb</span> check this
-              </span>
-              <span className="inline-flex items-center gap-2">
-                <span className="font-mono text-zinc-700">%</span> held from the bar before
-              </span>
-              <span className="ml-auto">
-                {summary.chordCount} chords · {summary.distinctChords} distinct · mean confidence{" "}
-                {summary.meanConfidence}
-              </span>
-            </div>
-          </div>
-          )}
+          ) : null}
         </>
       ) : null}
 

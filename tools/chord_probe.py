@@ -307,8 +307,8 @@ def decode_chords(harmonic: np.ndarray, bass: np.ndarray, drums: np.ndarray, tun
     if len(beats) < 4:
         raise SystemExit("Beat tracking failed - too few beats detected.")
 
-    beat_chroma = librosa.util.sync(chroma, beats, aggregate=np.median)
-    beat_bass = librosa.util.sync(bass_chroma, beats, aggregate=np.median)
+    beat_chroma = librosa.util.sync(chroma, beats, aggregate=np.median, pad=False)
+    beat_bass = librosa.util.sync(bass_chroma, beats, aggregate=np.median, pad=False)
     beat_times = librosa.frames_to_time(beats, sr=ANALYSIS_SR, hop_length=HOP)
 
     templates = build_templates()

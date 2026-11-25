@@ -1,7 +1,7 @@
 import { ArrowLeft, Download, Loader2, Pause, Play, RotateCcw, TriangleAlert, Volume2 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { archiveSplitStems, exportSplitMix, getSplit } from "../api.js";
+import { exportSplitMix, getSplit } from "../api.js";
 import Button from "../components/Button.jsx";
 import StemChannelStrip from "../components/StemChannelStrip.jsx";
 import StemPlayer from "../utils/stemPlayback.js";
@@ -30,8 +30,6 @@ export default function StemPlayerPage() {
   const [channels, setChannels] = useState({});
   const [soloId, setSoloId] = useState(null);
   const [peaks, setPeaks] = useState({});
-  const [archiving, setArchiving] = useState(false);
-  const [archive, setArchive] = useState(null);
   const [exporting, setExporting] = useState(false);
   const [exported, setExported] = useState(null);
 
@@ -182,19 +180,6 @@ export default function StemPlayerPage() {
     playerRef.current?.setMasterVolume(value);
   }
 
-  async function onArchive() {
-    if (!split) return;
-    setArchiving(true);
-    setError("");
-    try {
-      setArchive(await archiveSplitStems(split.id));
-    } catch (exc) {
-      setError(exc.message);
-    } finally {
-      setArchiving(false);
-    }
-  }
-
   async function onExport() {
     if (!split) return;
     setExporting(true);
@@ -253,43 +238,26 @@ export default function StemPlayerPage() {
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex flex-wrap items-center gap-3">
-        <Button as={Link} to="/stem-splitter" variant="ghost">
+      <div className="flex flex-col gap-2">
+        <Button as={Link} to="/stem-splitter" variant="ghost" className="self-start">
           <ArrowLeft size={15} />
           Stem Splitter
         </Button>
-        <div className="min-w-0 flex-grow">
-          <h1 className="truncate text-2xl font-semibold text-white">{split.title}</h1>
+        <div>
+          <h1 className="text-xl font-semibold leading-snug text-white sm:text-2xl">{split.title}</h1>
           <p className="mt-1 text-[12px] text-zinc-500">
             {split.stems.length} stems · {split.modelName}
             {split.elapsedSeconds ? ` · separated in ${(split.elapsedSeconds / 60).toFixed(1)} min` : ""}
           </p>
         </div>
-        <Button type="button" variant="secondary" onClick={onArchive} disabled={archiving}>
-          {archiving ? <Loader2 size={15} className="animate-spin" /> : <Download size={15} />}
-          {archiving ? "Zipping..." : "Download all stems"}
-        </Button>
-        <Button type="button" variant="secondary" onClick={onExport} disabled={exporting || !ready}>
-          {exporting ? <Loader2 size={15} className="animate-spin" /> : <Download size={15} />}
-          {exporting ? "Rendering..." : "Export custom mix"}
-        </Button>
+        <div className="mt-1">
+          <Button type="button" variant="secondary" onClick={onExport} disabled={exporting || !ready}>
+            {exporting ? <Loader2 size={15} className="animate-spin" /> : <Download size={15} />}
+            {exporting ? "Rendering..." : "Export custom mix"}
+          </Button>
+        </div>
       </div>
 
-      {archive ? (
-        <div className="flex items-center gap-3 rounded-lg border border-teal-300/30 bg-teal-300/[0.08] px-4 py-3">
-          <Download size={16} className="shrink-0 text-teal-300" />
-          <p className="min-w-0 flex-grow truncate text-[13px] text-teal-100">
-            {archive.stemCount} stems zipped ({(archive.bytes / 1048576).toFixed(0)} MB)
-          </p>
-          <a
-            href={mediaUrl(archive.filePath)}
-            download
-            className="shrink-0 text-[13px] font-semibold text-teal-200 underline"
-          >
-            Download zip
-          </a>
-        </div>
-      ) : null}
 
       {!ready ? (
         <div className="flex items-center gap-3 rounded-lg border border-white/10 bg-white/[0.04] px-4 py-3 text-sm text-zinc-300">
@@ -298,7 +266,7 @@ export default function StemPlayerPage() {
         </div>
       ) : null}
 
-      <div className="flex items-center gap-4 rounded-xl border border-white/10 bg-white/[0.04] px-5 py-3">
+      <div className="flex items-center gap-2 rounded-xl border border-white/10 bg-white/[0.04] px-3 py-3 sm:gap-4 sm:px-5">
         <button
           type="button"
           onClick={togglePlay}
@@ -331,7 +299,7 @@ export default function StemPlayerPage() {
 
         <span className="shrink-0 text-sm tabular-nums text-zinc-500">{formatTime(duration)}</span>
 
-        <div className="flex shrink-0 items-center gap-2">
+        <div className="hidden shrink-0 items-center gap-2 sm:flex">
           <Volume2 size={17} className="text-zinc-400" />
           <label htmlFor="master-volume" className="sr-only">
             Master volume
@@ -344,7 +312,7 @@ export default function StemPlayerPage() {
             step={0.01}
             value={masterVolume}
             onChange={(event) => changeMaster(Number(event.target.value))}
-            className="w-[108px]"
+            className="w-[90px]"
           />
         </div>
       </div>
