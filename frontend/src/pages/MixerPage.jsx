@@ -1,4 +1,4 @@
-import { ArrowLeft, Check, ChevronDown, Gauge, Headphones, MicOff, Pencil, Play, RefreshCw, RotateCcw, Settings2, SlidersHorizontal, Sparkles, Trash2, Undo2, Volume2, WandSparkles, X } from "lucide-react";
+import { ArrowLeft, Check, ChevronDown, Gauge, Headphones, Loader2, MicOff, Pause, Pencil, Play, Radio, RefreshCw, RotateCcw, Settings2, SlidersHorizontal, Sparkles, Trash2, Undo2, Volume2, WandSparkles, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import {
@@ -26,8 +26,11 @@ import Button from "../components/Button.jsx";
 import EmptyState from "../components/EmptyState.jsx";
 import ProcessingPanel from "../components/ProcessingPanel.jsx";
 import StatusBadge from "../components/StatusBadge.jsx";
+import StemEqPanel from "../components/StemEqPanel.jsx";
 import WaveformPreview from "../components/WaveformPreview.jsx";
 import { MIX_PRESETS } from "../constants.js";
+import { defaultEqBands, normalizeEqBands } from "../utils/eq.js";
+import StemPlayer from "../utils/stemPlayback.js";
 import { formatDateTime, formatDb, formatLufs, formatPan } from "../utils/format.js";
 
 const defaultControls = {
@@ -56,6 +59,36 @@ const sunoLeadVocalSendSettings = {
   delaySend: 8,
 };
 const runningStatuses = new Set(["Pending", "Processing", "Cancelling"]);
+
+// Settings the live graph can apply while the song plays. Everything else
+// still needs a render, so the "regenerate" notice is only raised for those.
+const livePreviewKeys = new Set(["gainDb", "pan", "mute", "solo", "eqBands"]);
+
+function mediaUrl(path) {
+  if (!path) return null;
+  return `/media/${String(path).replace(/^\/+/, "")}`;
+}
+
+/** Same source precedence as the backend's _mix_source_path: enhanced, then cleaned, then original. */
+function mixSourceUrl(stem) {
+  const vocalSettings = stem.vocalEnhancementSettings || {};
+  const vocalResult = stem.vocalEnhancementResult || {};
+  if (vocalSettings.enabled && vocalSettings.useEnhancedInMix !== false && vocalResult.status === "Completed" && vocalResult.enhancedFileUrl) {
+    return vocalResult.enhancedFileUrl;
+  }
+  const cleaningSettings = stem.cleaningSettings || {};
+  const cleaningResult = stem.cleaningResult || {};
+  if (cleaningSettings.enabled && cleaningSettings.useCleanedInMix !== false && cleaningResult.status === "Completed" && cleaningResult.cleanedFileUrl) {
+    return cleaningResult.cleanedFileUrl;
+  }
+  return stem.fileUrl || mediaUrl(stem.filePath);
+}
+
+function formatClock(seconds) {
+  if (!Number.isFinite(seconds) || seconds < 0) return "0:00";
+  const total = Math.floor(seconds);
+  return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")}`;
+}
 
 export default function MixerPage() {
   const { projectId } = useParams();
@@ -94,6 +127,133 @@ export default function MixerPage() {
     (mixSettings.stems || []).forEach((setting) => map.set(setting.stemId, setting));
     return map;
   }, [mixSettings.stems]);
+
+  // --- live preview ---------------------------------------------------------
+  // Opt-in: six decoded stems is a few hundred MB of browser memory, so the
+  // graph is only built when the engineer asks for it.
+  const playerRef = useRef(null);
+  const [liveEnabled, setLiveEnabled] = useState(false);
+  const [liveState, setLiveState] = useState({ status: "idle", loaded: 0, total: 0, error: "" });
+  const [livePlaying, setLivePlaying] = useState(false);
+  const [liveTime, setLiveTime] = useState(0);
+  const [liveDuration, setLiveDuration] = useState(0);
+  const [liveVolume, setLiveVolume] = useState(0.85);
+  const liveReady = liveState.status === "ready";
+
+  const stemTypeOf = (stem) => stem.stemType || stem.detectionResult?.suggestedStemType || "Unknown";
+
+  useEffect(() => {
+    if (!liveEnabled || !stems.length) return undefined;
+
+    const player = new StemPlayer();
+    playerRef.current = player;
+    let cancelled = false;
+
+    const sources = stems.map((stem) => {
+      const setting = { ...defaultSetting(stem.id), ...(settingsByStem.get(stem.id) || {}) };
+      const stemType = stemTypeOf(stem);
+      return {
+        id: stem.id,
+        url: mixSourceUrl(stem),
+        gainDb: setting.gainDb,
+        pan: setting.pan,
+        muted: setting.mute,
+        bands: normalizeEqBands(setting.eqBands, stemType),
+        stemType,
+      };
+    });
+
+    setLiveState({ status: "loading", loaded: 0, total: sources.length, error: "" });
+    player
+      .load(sources, (loaded, total) => {
+        if (!cancelled) setLiveState((current) => ({ ...current, loaded, total }));
+      })
+      .then(() => {
+        if (cancelled) return;
+        player.setMasterVolume(liveVolume);
+        setLiveDuration(player.duration);
+        setLiveState({ status: "ready", loaded: sources.length, total: sources.length, error: "" });
+      })
+      .catch((exc) => {
+        if (!cancelled) setLiveState({ status: "error", loaded: 0, total: 0, error: exc.message });
+      });
+
+    return () => {
+      cancelled = true;
+      player.destroy();
+      playerRef.current = null;
+      setLivePlaying(false);
+      setLiveTime(0);
+      setLiveDuration(0);
+      setLiveState({ status: "idle", loaded: 0, total: 0, error: "" });
+    };
+    // Settings are pushed by the sync effect below, so they are deliberately
+    // not dependencies here - a fader move must not reload the audio.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [liveEnabled, projectId, stems.length]);
+
+  // Every saved setting is mirrored onto the running graph. Writing all of
+  // them on each change costs a handful of AudioParam writes and keeps the
+  // preview honest without plumbing every control by hand.
+  useEffect(() => {
+    const player = playerRef.current;
+    if (!player || !liveReady) return;
+    const soloSetting = (mixSettings.stems || []).find((setting) => setting.solo);
+    player.setSolo(soloSetting ? soloSetting.stemId : null);
+    stems.forEach((stem) => {
+      const setting = { ...defaultSetting(stem.id), ...(settingsByStem.get(stem.id) || {}) };
+      player.setStemSettings(stem.id, {
+        gainDb: setting.gainDb,
+        pan: setting.pan,
+        muted: setting.mute,
+        bands: setting.eqBands,
+        stemType: stemTypeOf(stem),
+      });
+    });
+  }, [stems, settingsByStem, mixSettings.stems, liveReady]);
+
+  useEffect(() => {
+    if (!livePlaying) return undefined;
+    const timer = window.setInterval(() => {
+      const player = playerRef.current;
+      if (!player) return;
+      setLiveTime(player.currentTime);
+      if (player.duration && player.currentTime >= player.duration - 0.05) {
+        player.pause();
+        setLivePlaying(false);
+      }
+    }, 100);
+    return () => window.clearInterval(timer);
+  }, [livePlaying]);
+
+  const toggleLivePlay = async () => {
+    const player = playerRef.current;
+    if (!player || !liveReady) return;
+    if (livePlaying) {
+      player.pause();
+      setLiveTime(player.currentTime);
+      setLivePlaying(false);
+      return;
+    }
+    try {
+      await player.play(liveTime >= player.duration - 0.05 ? 0 : liveTime);
+      setLivePlaying(true);
+    } catch (err) {
+      setLiveState((current) => ({ ...current, status: "error", error: err.message }));
+    }
+  };
+
+  const seekLive = (seconds) => {
+    const player = playerRef.current;
+    if (!player) return;
+    player.seek(seconds);
+    setLiveTime(seconds);
+  };
+
+  const changeLiveVolume = (value) => {
+    setLiveVolume(value);
+    playerRef.current?.setMasterVolume(value);
+  };
 
   const suggestionCount = stems.filter((stem) => stem.autoBalanceSuggestion).length;
   const appliedCount = (mixSettings.stems || []).filter((setting) => setting.autoBalanceApplied).length;
@@ -491,7 +651,12 @@ export default function MixerPage() {
   const updateLocalSetting = (stemId, updates) => {
     setBalanceNotice("");
     setRoughMix(null);
-    setPreviewNotice("Stem settings changed. Generate a new preview or mix version to hear the update.");
+    // Volume, pan, mute, solo and EQ are already audible on the live graph,
+    // so they do not earn a "regenerate to hear this" nag.
+    const audibleNow =
+      liveReady &&
+      Object.keys(updates).every((key) => livePreviewKeys.has(key) || key === "autoBalanceApplied");
+    setPreviewNotice(audibleNow ? "" : "Stem settings changed. Generate a new preview or mix version to hear the update.");
     setProject((current) => {
       if (!current) return current;
       const stemsSettings = [...(current.mixSettings?.stems || [])];
@@ -660,6 +825,20 @@ export default function MixerPage() {
           </div>
           {latestVersion ? <StatusBadge status="Advanced Mix Ready" /> : null}
         </div>
+        {stems.length ? (
+          <LivePreviewBar
+            enabled={liveEnabled}
+            state={liveState}
+            playing={livePlaying}
+            time={liveTime}
+            duration={liveDuration}
+            volume={liveVolume}
+            onToggleEnabled={() => setLiveEnabled((current) => !current)}
+            onTogglePlay={toggleLivePlay}
+            onSeek={seekLive}
+            onVolume={changeLiveVolume}
+          />
+        ) : null}
         {stems.length ? (
           <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-5">
             {stems.map((stem) => {
@@ -1062,6 +1241,12 @@ function StemProcessingCard({ stem, setting, saving, onLocalChange, onCommit, on
         <ControlSlider label="Delay Send" value={setting.delaySend} onChange={(value) => onLocalChange(stem.id, { delaySend: value })} onCommit={(value) => onCommit(stem.id, { delaySend: value })} />
         <ControlSlider label="Presence" value={setting.presenceAmount} min={-50} max={50} display={signedPercent(setting.presenceAmount)} onChange={(value) => onLocalChange(stem.id, { presenceAmount: value })} onCommit={(value) => onCommit(stem.id, { presenceAmount: value })} />
         <ControlSlider label="Compression" value={setting.compressionAmount} onChange={(value) => onLocalChange(stem.id, { compressionAmount: value })} onCommit={(value) => onCommit(stem.id, { compressionAmount: value })} />
+        <StemEqPanel
+          bands={setting.eqBands}
+          stemType={stem.stemType || stem.detectionResult?.suggestedStemType || "Unknown"}
+          onChange={(bands) => onLocalChange(stem.id, { eqBands: bands })}
+          onCommit={(bands) => onCommit(stem.id, { eqBands: bands })}
+        />
       </div>
 
       <div className="mt-4 border-t border-white/10 pt-3">
@@ -1221,6 +1406,75 @@ function processingChain(stemType, setting) {
   return [...(chains[stemType] || ["HPF", "Cleanup EQ", "Comp"]), `Verb ${Math.round(setting.reverbSend)}%`, `Delay ${Math.round(setting.delaySend || 0)}%`, `Presence ${signedPercent(setting.presenceAmount || 0)}`];
 }
 
+function LivePreviewBar({ enabled, state, playing, time, duration, volume, onToggleEnabled, onTogglePlay, onSeek, onVolume }) {
+  const loading = state.status === "loading";
+  const ready = state.status === "ready";
+
+  return (
+    <div className="mb-4 rounded-xl border border-teal-300/20 bg-teal-300/[0.045] p-3">
+      <div className="flex flex-wrap items-center gap-3">
+        <Button type="button" variant={enabled ? "secondary" : "primary"} onClick={onToggleEnabled} className="min-h-10">
+          <Radio size={16} />
+          {enabled ? "Stop live preview" : "Live preview"}
+        </Button>
+
+        {enabled ? (
+          <>
+            <Button type="button" variant="secondary" onClick={onTogglePlay} disabled={!ready} className="min-h-10 px-3" aria-label={playing ? "Pause" : "Play"}>
+              {loading ? <Loader2 size={16} className="animate-spin" /> : playing ? <Pause size={16} /> : <Play size={16} />}
+            </Button>
+            <span className="font-mono text-xs text-zinc-300">
+              {formatClock(time)} / {formatClock(duration)}
+            </span>
+            <input
+              type="range"
+              min={0}
+              max={Math.max(1, duration)}
+              step={0.1}
+              value={Math.min(time, duration || 0)}
+              disabled={!ready}
+              onChange={(event) => onSeek(Number(event.target.value))}
+              aria-label="Seek"
+              className="min-w-[160px] flex-1 accent-teal-300"
+            />
+            <label className="flex items-center gap-2">
+              <Volume2 size={15} className="text-zinc-400" />
+              <input
+                type="range"
+                min={0}
+                max={1}
+                step={0.01}
+                value={volume}
+                onChange={(event) => onVolume(Number(event.target.value))}
+                aria-label="Preview volume"
+                className="w-24 accent-teal-300"
+              />
+            </label>
+          </>
+        ) : (
+          <p className="text-sm text-zinc-400">
+            Hear volume, pan, mute, solo and EQ changes as you make them - no render needed.
+          </p>
+        )}
+      </div>
+
+      {loading ? (
+        <p className="mt-2 text-xs text-zinc-400">
+          Decoding stems… {state.loaded}/{state.total}
+        </p>
+      ) : null}
+      {state.status === "error" ? (
+        <p className="mt-2 text-xs text-rose-200">{state.error || "Could not start the live preview."}</p>
+      ) : null}
+      {ready ? (
+        <p className="mt-2 text-xs text-zinc-500">
+          Live: volume, pan, mute, solo, EQ. Still rendered: sends, compression, presence and the master chain.
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
 function defaultSetting(stemId) {
   return {
     stemId,
@@ -1234,5 +1488,6 @@ function defaultSetting(stemId) {
     delaySend: 0,
     presenceAmount: 0,
     compressionAmount: 45,
+    eqBands: defaultEqBands("Unknown"),
   };
 }

@@ -335,6 +335,8 @@ def update_mix_stem(project_id: str, stem_id: str, payload: UpdateMixStemRequest
         setting["presenceAmount"] = round(float(payload.presenceAmount), 2)
     if payload.compressionAmount is not None:
         setting["compressionAmount"] = round(float(payload.compressionAmount), 2)
+    if payload.eqBands is not None:
+        setting["eqBands"] = [band.model_dump() for band in payload.eqBands]
 
     now = utc_now_iso()
     _clear_rough_mix_reference(project)
@@ -536,9 +538,40 @@ def _require_completed_analysis(project: dict[str, Any]) -> None:
         )
 
 
+# Four-band channel EQ starting points per stem type. Every band starts at
+# 0 dB, so adding this to an existing project changes no render until the
+# engineer moves something; the frequencies are only where the knobs sit.
+_EQ_BAND_FREQUENCIES: dict[str, tuple[float, float, float, float]] = {
+    "Lead Vocal": (120, 400, 3000, 8000),
+    "Backing Vocal": (140, 450, 3000, 9000),
+    "Drums": (80, 400, 3000, 7000),
+    "Kick": (60, 200, 1200, 4000),
+    "Snare": (120, 400, 3000, 8000),
+    "Bass": (60, 180, 800, 2500),
+    "Electric Guitar": (120, 400, 2500, 6000),
+    "Acoustic Guitar": (120, 350, 3000, 8000),
+    "Keys/Piano": (100, 350, 2500, 7000),
+    "Pads/Strings": (120, 400, 2000, 8000),
+    "FX/Ambience": (100, 400, 2500, 9000),
+}
+
+
+def default_eq_bands(stem_type: str) -> list[dict[str, Any]]:
+    """Neutral four-band EQ: low shelf, two bells, high shelf."""
+    low, low_mid, high_mid, high = _EQ_BAND_FREQUENCIES.get(stem_type, (100, 400, 2500, 8000))
+    return [
+        {"type": "lowshelf", "frequency": low, "gainDb": 0, "q": 0.707, "enabled": True},
+        {"type": "peaking", "frequency": low_mid, "gainDb": 0, "q": 1.0, "enabled": True},
+        {"type": "peaking", "frequency": high_mid, "gainDb": 0, "q": 1.0, "enabled": True},
+        {"type": "highshelf", "frequency": high, "gainDb": 0, "q": 0.707, "enabled": True},
+    ]
+
+
 def _ensure_mix_setting(project: dict[str, Any], stem_id: str) -> dict[str, Any]:
     project.setdefault("mixSettings", {}).setdefault("stems", [])
     setting = next((item for item in project["mixSettings"]["stems"] if item["stemId"] == stem_id), None)
+    stem = next((item for item in project.get("stems", []) if item["id"] == stem_id), None)
+    stem_type = effective_stem_type(stem) if stem else "Unknown"
     if setting is None:
         setting = {
             "stemId": stem_id,
@@ -552,6 +585,7 @@ def _ensure_mix_setting(project: dict[str, Any], stem_id: str) -> dict[str, Any]
             "delaySend": 0,
             "presenceAmount": 0,
             "compressionAmount": 50,
+            "eqBands": default_eq_bands(stem_type),
         }
         project["mixSettings"]["stems"].append(setting)
     else:
@@ -560,6 +594,7 @@ def _ensure_mix_setting(project: dict[str, Any], stem_id: str) -> dict[str, Any]
         setting.setdefault("delaySend", 0)
         setting.setdefault("presenceAmount", 0)
         setting.setdefault("compressionAmount", 50)
+        setting.setdefault("eqBands", default_eq_bands(stem_type))
     return setting
 
 

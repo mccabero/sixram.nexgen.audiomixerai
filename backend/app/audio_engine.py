@@ -2084,6 +2084,13 @@ def _process_advanced_stem(audio: np.ndarray, sample_rate: int, item: dict, cont
         except Exception as exc:
             warnings.append(f"{item.get('filename', 'Stem')}: skipped presence control ({str(exc) or 'failed'}).")
 
+    # The user's own EQ runs whether or not the automatic chain is enabled:
+    # these bands are their decision, not part of the preset shaping.
+    try:
+        dry = _apply_stem_eq(dry, sample_rate, item.get("eqBands"))
+    except Exception as exc:
+        warnings.append(f"{item.get('filename', 'Stem')}: skipped channel EQ ({str(exc) or 'failed'}).")
+
     total_gain = float(item.get("gainDb", 0)) + float(item.get("presetGainDb", 0))
     if stem_type == "Lead Vocal":
         total_gain += float(controls.get("vocalBoost", 0))
@@ -2094,6 +2101,34 @@ def _process_advanced_stem(audio: np.ndarray, sample_rate: int, item: dict, cont
     send = (dry * send_amount).astype(np.float32, copy=False)
     dry = np.nan_to_num(dry, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float32, copy=False)
     return dry, send
+
+
+def _apply_stem_eq(audio: np.ndarray, sample_rate: int, bands: list | None) -> np.ndarray:
+    """User channel EQ: up to four RBJ biquads straight from the stem's saved
+    bands. The browser preview builds the same filters from the same numbers
+    with BiquadFilterNode, so what you hear while mixing is what renders.
+    """
+    if not bands:
+        return audio
+    kinds = {"peaking": "peak", "lowshelf": "lowshelf", "highshelf": "highshelf"}
+    out = audio
+    for band in bands:
+        if not bool(band.get("enabled", True)):
+            continue
+        gain_db = float(band.get("gainDb", 0))
+        if abs(gain_db) < 0.05:
+            continue
+        frequency = float(band.get("frequency", 1000))
+        if frequency <= 0 or frequency >= sample_rate / 2:
+            continue
+        kind = kinds.get(str(band.get("type", "peaking")), "peak")
+        q = max(0.1, min(10.0, float(band.get("q", 1.0))))
+        try:
+            sos = _rbj_biquad_sos(sample_rate, kind, frequency, q, gain_db)
+            out = signal.sosfilt(sos, out, axis=0).astype(np.float32, copy=False)
+        except Exception:
+            continue
+    return out
 
 
 def _should_bypass_vocal_channel_strip(item: dict) -> bool:

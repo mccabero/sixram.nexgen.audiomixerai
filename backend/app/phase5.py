@@ -10,7 +10,7 @@ from fastapi import HTTPException
 from .audio_engine import ensure_audio_environment, generate_advanced_mix
 from .logging_utils import append_project_log, utc_now_iso
 from .models import MixVersion, ProcessingJob, Project, UpdateMixControlsRequest, UpdateMixVersionRequest
-from .phase2 import _clear_rough_mix_reference, _ensure_mix_setting, _mix_source_path
+from .phase2 import _clear_rough_mix_reference, _ensure_mix_setting, _mix_source_path, default_eq_bands
 from .stem_detection import effective_stem_type
 from .storage import (
     JobCancelled,
@@ -538,6 +538,7 @@ def _advanced_mix_inputs(project: dict[str, Any], preset: dict[str, Any], instru
         setting.setdefault("delaySend", defaults["delaySend"])
         setting.setdefault("presenceAmount", defaults["presenceAmount"])
         setting.setdefault("compressionAmount", defaults["compressionAmount"])
+        setting.setdefault("eqBands", default_eq_bands(stem_type))
         pan = float(setting.get("pan", 0))
         if stem_type == "Backing Vocal" and len(backing_vocals) > 1 and abs(pan) < 1:
             pan = _backing_stack_pan(backing_vocal_index, len(backing_vocals), controls)
@@ -558,6 +559,7 @@ def _advanced_mix_inputs(project: dict[str, Any], preset: dict[str, Any], instru
                 "delaySend": float(setting.get("delaySend", defaults["delaySend"])),
                 "presenceAmount": float(setting.get("presenceAmount", defaults["presenceAmount"])),
                 "compressionAmount": float(setting.get("compressionAmount", defaults["compressionAmount"])),
+                "eqBands": setting.get("eqBands") or default_eq_bands(stem_type),
             }
         )
 
@@ -702,6 +704,7 @@ def _reset_stem_processing_settings(project: dict[str, Any]) -> None:
         setting["delaySend"] = stem_defaults["delaySend"]
         setting["presenceAmount"] = stem_defaults["presenceAmount"]
         setting["compressionAmount"] = stem_defaults["compressionAmount"]
+        setting["eqBands"] = default_eq_bands(stem_type)
 
 
 def _phase5_default_pan(stem_type: str, type_index: int) -> float:

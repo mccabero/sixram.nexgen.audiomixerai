@@ -1,3 +1,5 @@
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 from .config import STEM_TYPES
@@ -32,6 +34,21 @@ class StemDetectionResult(BaseModel):
     features: dict[str, float | int | None] = Field(default_factory=dict)
 
 
+class StemEqBand(BaseModel):
+    """One band of the per-stem channel EQ.
+
+    Mirrors an RBJ biquad exactly, so the browser preview can build the same
+    filter with BiquadFilterNode and the render can build it with
+    _rbj_biquad_sos from the identical numbers.
+    """
+
+    type: Literal["lowshelf", "peaking", "highshelf"] = "peaking"
+    frequency: float = Field(default=1000, ge=20, le=20000)
+    gainDb: float = Field(default=0, ge=-18, le=18)
+    q: float = Field(default=1.0, ge=0.1, le=10)
+    enabled: bool = True
+
+
 class UpdateMixStemRequest(BaseModel):
     gainDb: float | None = Field(default=None, ge=-48, le=24)
     pan: float | None = Field(default=None, ge=-100, le=100)
@@ -42,6 +59,7 @@ class UpdateMixStemRequest(BaseModel):
     delaySend: float | None = Field(default=None, ge=0, le=100)
     presenceAmount: float | None = Field(default=None, ge=-50, le=50)
     compressionAmount: float | None = Field(default=None, ge=0, le=100)
+    eqBands: list[StemEqBand] | None = Field(default=None, max_length=4)
 
 
 class UpdateMixControlsRequest(BaseModel):
@@ -426,6 +444,7 @@ class MixStemSetting(BaseModel):
     delaySend: float = 0
     presenceAmount: float = 0
     compressionAmount: float = 45
+    eqBands: list[StemEqBand] = Field(default_factory=list)
 
 
 class MixControls(BaseModel):
@@ -458,6 +477,7 @@ class MixVersionSource(BaseModel):
     delaySend: float
     presenceAmount: float
     compressionAmount: float
+    eqBands: list[StemEqBand] = Field(default_factory=list)
 
 
 class MixVersion(BaseModel):
