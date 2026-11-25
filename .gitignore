@@ -14,3 +14,7 @@ storage/
 *.pyc
 __pycache__/
 .DS_Store
+
+# Local Claude tooling settings and scratch outputs; not part of the app.
+.claude/
+Claude outputs/

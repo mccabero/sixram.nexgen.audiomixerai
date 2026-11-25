@@ -1,12 +1,14 @@
-import { CircleHelp, Mic2, MoonStar, SlidersHorizontal, Sparkles, SunMedium, X } from "lucide-react";
+import { CircleHelp, LogOut, Mic2, MoonStar, SlidersHorizontal, Sparkles, SunMedium, X } from "lucide-react";
 import { useEffect, useState } from "react";
-import { Link, NavLink, Outlet } from "react-router-dom";
+import { Link, NavLink, Outlet, useNavigate } from "react-router-dom";
 import sixramLogo from "../assets/sixram-band-studio-logo.png";
+import { signOut } from "../utils/auth.js";
 import { applyDocumentTheme, persistTheme, readStoredTheme } from "../utils/theme.js";
 import Button from "./Button.jsx";
 import GlobalJobStatus from "./GlobalJobStatus.jsx";
 
 export default function AppLayout() {
+  const navigate = useNavigate();
   const [theme, setTheme] = useState(() => readStoredTheme());
   const [timeGuideOpen, setTimeGuideOpen] = useState(false);
   const [vocalGuideOpen, setVocalGuideOpen] = useState(false);
@@ -103,6 +105,20 @@ export default function AppLayout() {
               {theme === "dark" ? <SunMedium size={17} /> : <MoonStar size={17} />}
               <span className="hidden sm:inline">{theme === "dark" ? "Light mode" : "Dark mode"}</span>
               <span className="sm:hidden">{theme === "dark" ? "Light" : "Dark"}</span>
+            </Button>
+            <Button
+              type="button"
+              variant="secondary"
+              className="min-h-11 px-3"
+              onClick={() => {
+                signOut();
+                navigate("/login", { replace: true });
+              }}
+              aria-label="Log out"
+              title="Log out"
+            >
+              <LogOut size={17} />
+              <span className="hidden sm:inline">Log out</span>
             </Button>
           </div>
         </div>

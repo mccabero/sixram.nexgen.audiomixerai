@@ -451,3 +451,146 @@ html[data-theme="light"] [class*="text-lime-50"],
 html[data-theme="light"] [class*="text-lime-100"] {
   color: #4d7c0f !important;
 }
+
+/* ---------- PIN login ---------- */
+.pin-card {
+  border-color: rgba(255, 255, 255, 0.1);
+  background: linear-gradient(135deg, rgba(39, 39, 42, 0.96), rgba(9, 9, 11, 0.96));
+}
+
+.pin-title {
+  color: #ffffff;
+}
+
+.pin-subtitle {
+  color: #a1a1aa;
+}
+
+.pin-footnote {
+  color: #71717a;
+}
+
+.pin-error {
+  color: #fda4af;
+  min-height: 1.25rem;
+}
+
+.pin-link {
+  color: #5eead4;
+}
+
+.pin-link:hover {
+  color: #99f6e4;
+}
+
+.pin-digit {
+  border-color: rgba(255, 255, 255, 0.12);
+  background: rgba(0, 0, 0, 0.3);
+  color: #ffffff;
+  caret-color: #5eead4;
+}
+
+.pin-digit:focus {
+  border-color: rgba(45, 212, 191, 0.55);
+  box-shadow: 0 0 0 3px rgba(45, 212, 191, 0.16);
+}
+
+.pin-digit-filled {
+  border-color: rgba(45, 212, 191, 0.4);
+  background: rgba(45, 212, 191, 0.08);
+}
+
+.pin-digit-error {
+  border-color: rgba(253, 164, 175, 0.45);
+  background: rgba(251, 113, 133, 0.1);
+}
+
+.pin-key,
+.pin-theme-toggle {
+  border-color: rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.065);
+  color: #e4e4e7;
+}
+
+.pin-key:hover,
+.pin-theme-toggle:hover {
+  border-color: rgba(255, 255, 255, 0.18);
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.pin-key:active {
+  transform: scale(0.97);
+}
+
+.pin-shake {
+  animation: pin-shake 400ms ease;
+}
+
+@keyframes pin-shake {
+  0%, 100% { transform: translateX(0); }
+  20% { transform: translateX(-7px); }
+  40% { transform: translateX(7px); }
+  60% { transform: translateX(-4px); }
+  80% { transform: translateX(4px); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pin-shake {
+    animation: none;
+  }
+}
+
+html[data-theme="light"] .pin-card {
+  border-color: rgba(148, 163, 184, 0.28) !important;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(248, 250, 252, 0.98)) !important;
+  box-shadow: 0 28px 90px rgba(15, 23, 42, 0.14) !important;
+}
+
+html[data-theme="light"] .pin-title {
+  color: #0f172a !important;
+}
+
+html[data-theme="light"] .pin-subtitle {
+  color: #64748b !important;
+}
+
+html[data-theme="light"] .pin-footnote {
+  color: #94a3b8 !important;
+}
+
+html[data-theme="light"] .pin-error {
+  color: #be123c !important;
+}
+
+html[data-theme="light"] .pin-link {
+  color: #0f766e !important;
+}
+
+html[data-theme="light"] .pin-digit {
+  border-color: rgba(148, 163, 184, 0.36) !important;
+  background: rgba(255, 255, 255, 0.95) !important;
+  color: #0f172a !important;
+  caret-color: #0f766e;
+}
+
+html[data-theme="light"] .pin-digit-filled {
+  border-color: rgba(13, 148, 136, 0.45) !important;
+  background: rgba(45, 212, 191, 0.1) !important;
+}
+
+html[data-theme="light"] .pin-digit-error {
+  border-color: rgba(225, 29, 72, 0.4) !important;
+  background: rgba(251, 113, 133, 0.1) !important;
+}
+
+html[data-theme="light"] .pin-key,
+html[data-theme="light"] .pin-theme-toggle {
+  border-color: rgba(148, 163, 184, 0.3) !important;
+  background: rgba(255, 255, 255, 0.9) !important;
+  color: #334155 !important;
+}
+
+html[data-theme="light"] .pin-key:hover,
+html[data-theme="light"] .pin-theme-toggle:hover {
+  background: rgba(241, 245, 249, 0.95) !important;
+}
