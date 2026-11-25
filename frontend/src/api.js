@@ -757,3 +757,7 @@ export function clearChordSheetLyrics(sheetId) {
     method: "DELETE",
   });
 }
+
+export function getMixChain(projectId) {
+  return request(`/projects/${projectId}/mix-chain`);
+}

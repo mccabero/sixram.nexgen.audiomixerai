@@ -74,6 +74,7 @@ from .phase5 import (
     create_advanced_mix_job,
     delete_mix_version,
     generate_advanced_mix_preview,
+    get_mix_chain,
     get_mix_presets,
     reset_advanced_mix,
     reset_stem_processing,
@@ -561,6 +562,12 @@ def api_generate_auto_balance(project_id: str) -> Project:
 @app.post("/api/projects/{project_id}/apply-auto-balance", response_model=Project)
 def api_apply_auto_balance(project_id: str) -> Project:
     return apply_auto_balance(project_id)
+
+
+@app.get("/api/projects/{project_id}/mix-chain")
+def api_get_mix_chain(project_id: str) -> dict:
+    """The resolved processing chain, for the mixer's live preview."""
+    return get_mix_chain(project_id)
 
 
 @app.patch("/api/projects/{project_id}/mix-settings/{stem_id}", response_model=Project)

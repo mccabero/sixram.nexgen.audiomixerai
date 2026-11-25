@@ -163,3 +163,23 @@ export function logFrequencies(count = 160, min = EQ_MIN_FREQUENCY, max = EQ_MAX
   const ratio = Math.log(max / min);
   return Array.from({ length: count }, (_, index) => min * Math.exp((ratio * index) / (count - 1)));
 }
+
+/**
+ * Resolve a band request into one biquad, or null when it does nothing.
+ * Mirrors the backend's _eq_band_params, which the render uses for every
+ * automatic EQ stage and for the presence control.
+ */
+export function resolveBand(sampleRate, lowHz, highHz, gainDb) {
+  if (Math.abs(gainDb) < 0.05 || highHz <= lowHz || lowHz >= sampleRate / 2) return null;
+  const high = Math.min(highHz, sampleRate / 2 - 100);
+  if (high <= lowHz) return null;
+  if (high >= sampleRate * 0.3) {
+    return { type: "highshelf", frequency: Math.max(200, lowHz), q: 0.707, gainDb };
+  }
+  if (lowHz <= 60) {
+    return { type: "lowshelf", frequency: high, q: 0.707, gainDb };
+  }
+  const center = Math.sqrt(lowHz * high);
+  const q = Math.max(0.4, Math.min(4, center / Math.max(1, high - lowHz)));
+  return { type: "peaking", frequency: center, q, gainDb };
+}

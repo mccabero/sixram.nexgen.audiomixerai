@@ -9,6 +9,7 @@ import {
   deleteRoughMix,
   generateAutoBalance,
   generateRoughMix,
+  getMixChain,
   getProcessingJob,
   getProject,
   listMixPresets,
@@ -139,6 +140,34 @@ export default function MixerPage() {
   const [liveDuration, setLiveDuration] = useState(0);
   const [liveVolume, setLiveVolume] = useState(0.85);
   const liveReady = liveState.status === "ready";
+  const [chainPayload, setChainPayload] = useState(null);
+  const chainStamp = mixSettings.updatedAt || "";
+
+  // The chain is resolved by the backend, so it is refetched whenever a saved
+  // setting changes - a macro control or a compression amount reshapes it.
+  useEffect(() => {
+    if (!liveEnabled || !projectId) return undefined;
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      getMixChain(projectId)
+        .then((payload) => {
+          if (!cancelled) setChainPayload(payload);
+        })
+        .catch(() => {
+          /* the preview still works without it, just without the auto chain */
+        });
+    }, 250);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [liveEnabled, projectId, chainStamp]);
+
+  useEffect(() => {
+    const player = playerRef.current;
+    if (!player || !liveReady || !chainPayload) return;
+    player.setChainPayload(chainPayload);
+  }, [chainPayload, liveReady]);
 
   const stemTypeOf = (stem) => stem.stemType || stem.detectionResult?.suggestedStemType || "Unknown";
 
@@ -1453,7 +1482,7 @@ function LivePreviewBar({ enabled, state, playing, time, duration, volume, onTog
           </>
         ) : (
           <p className="text-sm text-zinc-400">
-            Hear volume, pan, mute, solo and EQ changes as you make them - no render needed.
+            Hear your changes as you make them - the full channel strip, no render needed.
           </p>
         )}
       </div>
@@ -1468,7 +1497,7 @@ function LivePreviewBar({ enabled, state, playing, time, duration, volume, onTog
       ) : null}
       {ready ? (
         <p className="mt-2 text-xs text-zinc-500">
-          Live: volume, pan, mute, solo, EQ. Still rendered: sends, compression, presence and the master chain.
+          Live: volume, pan, mute, solo, EQ, the automatic chain, presence and the sends. Compression and reverb are close approximations; mastering stays in the render.
         </p>
       ) : null}
     </div>

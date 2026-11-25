@@ -8,7 +8,8 @@
  *
  * Each stem then runs through its own strip:
  *
- *   source -> 4 biquads (channel EQ) -> gain -> equal-power pan -> master
+ *   source -> normalize -> automatic chain -> channel EQ -> gain
+ *          -> equal-power pan -> master, with reverb and delay sends
  *
  * Every control is a parameter write on a graph that never stops, so moving a
  * fader or an EQ band is audible immediately with no decode and no re-render.
@@ -17,6 +18,7 @@
  */
 
 import { EQ_BAND_COUNT, isBandActive, normalizeEqBands } from "./eq.js";
+import { buildStemChain, createDelayBus, createReverbImpulse, disconnectAll } from "./mixChain.js";
 
 const SCHEDULE_LEAD_SECONDS = 0.06;
 const RAMP_SECONDS = 0.02;
@@ -55,6 +57,8 @@ export default class StemPlayer {
     this.offset = 0;
     this.soloId = null;
     this.destroyed = false;
+    this.buses = null;
+    this.chainPayload = null;
   }
 
   _ensureContext() {
@@ -106,6 +110,10 @@ export default class StemPlayer {
   _createStrip(stem, buffer) {
     const context = this.context;
 
+    // The render normalises each stem before the channel strip; without the
+    // same gain here every compressor threshold downstream bites differently.
+    const normalizeGain = context.createGain();
+    const chainIn = context.createGain();
     const eqNodes = Array.from({ length: EQ_BAND_COUNT }, () => context.createBiquadFilter());
     const gainNode = context.createGain();
     // Explicit stereo so a mono stem is upmixed to both channels before the
@@ -123,15 +131,34 @@ export default class StemPlayer {
       const next = eqNodes[index + 1];
       node.connect(next ?? gainNode);
     });
+    normalizeGain.connect(chainIn);
     gainNode.connect(splitter);
     splitter.connect(leftGain, 0);
     splitter.connect(rightGain, 1);
     leftGain.connect(merger, 0, 0);
     rightGain.connect(merger, 0, 1);
-    merger.connect(this.master);
+    const stemOut = context.createGain();
+    merger.connect(stemOut);
+    stemOut.connect(this.master);
+
+    // Sends are taken after gain and pan, which is where the render takes them.
+    const reverbSend = context.createGain();
+    reverbSend.gain.value = 0;
+    const delaySend = context.createGain();
+    delaySend.gain.value = 0;
+    stemOut.connect(reverbSend);
+    stemOut.connect(delaySend);
 
     const strip = {
       buffer,
+      normalizeGain,
+      chainIn,
+      chainNodes: [],
+      chainTail: null,
+      stemOut,
+      reverbSend,
+      delaySend,
+      spec: stem.spec || null,
       eqNodes,
       gainNode,
       splitter,
@@ -147,7 +174,70 @@ export default class StemPlayer {
 
     this._writeEq(strip, true);
     this._writePan(strip, true);
+    this._buildChain(strip);
     return strip;
+  }
+
+  /**
+   * (Re)build the automatic chain between the normalize gain and the channel
+   * EQ. Rebuilt rather than retuned because IIR sections and waveshapers are
+   * not automatable - a macro control change makes a brief seam in the
+   * audio, which is the right trade for faders and EQ staying smooth.
+   */
+  _buildChain(strip) {
+    const context = this.context;
+    if (!context) return;
+
+    try {
+      strip.chainIn.disconnect();
+    } catch {
+      /* nothing connected yet */
+    }
+    disconnectAll(strip.chainNodes);
+    strip.chainNodes = [];
+
+    const head = strip.eqNodes[0] ?? strip.gainNode;
+    const spec = strip.spec;
+    if (!spec) {
+      strip.chainIn.connect(head);
+      return;
+    }
+
+    const built = buildStemChain(context, {
+      chain: spec.chain,
+      chainEnabled: spec.chainEnabled,
+      presenceAmount: spec.presenceAmount,
+      presenceBand: spec.presenceBand,
+    });
+    strip.chainIn.connect(built.input);
+    built.output.connect(head);
+    strip.chainNodes = built.nodes;
+
+    const normalizeDb = Number(spec.normalizeGainDb) || 0;
+    strip.normalizeGain.gain.value = dbToGain(normalizeDb);
+    strip.presetGainDb = Number(spec.presetGainDb) || 0;
+    this._writeSends(strip);
+  }
+
+  _writeSends(strip) {
+    const spec = strip.spec;
+    if (!spec) return;
+    const buses = this.buses;
+    const bus = buses?.[spec.sendBus] ?? buses?.space;
+
+    try {
+      strip.reverbSend.disconnect();
+      strip.delaySend.disconnect();
+    } catch {
+      /* not connected */
+    }
+    if (!bus) return;
+    strip.reverbSend.connect(bus.reverbIn);
+    strip.delaySend.connect(bus.delayIn);
+
+    const now = this.context?.currentTime ?? 0;
+    rampParam(strip.reverbSend.gain, Number(spec.reverbSendAmount) || 0, now, RAMP_SECONDS);
+    rampParam(strip.delaySend.gain, Number(spec.delaySendAmount) || 0, now, RAMP_SECONDS);
   }
 
   _writeEq(strip, immediate = false) {
@@ -179,7 +269,7 @@ export default class StemPlayer {
     const now = this.context.currentTime;
     for (const [id, strip] of this.stems) {
       const silenced = strip.muted || (this.soloId !== null && this.soloId !== id);
-      const target = silenced ? 0 : dbToGain(strip.gainDb);
+      const target = silenced ? 0 : dbToGain(strip.gainDb + (strip.presetGainDb || 0));
       // Short ramp instead of a step, so toggling mute does not click.
       strip.gainNode.gain.cancelScheduledValues(now);
       strip.gainNode.gain.setValueAtTime(strip.gainNode.gain.value, now);
@@ -221,7 +311,7 @@ export default class StemPlayer {
     for (const strip of this.stems.values()) {
       const node = context.createBufferSource();
       node.buffer = strip.buffer;
-      node.connect(strip.eqNodes[0] ?? strip.gainNode);
+      node.connect(strip.normalizeGain);
       // Every source gets the SAME startAt, which is what keeps them locked.
       node.start(startAt, offset);
       strip.node = node;
@@ -248,6 +338,59 @@ export default class StemPlayer {
     } else {
       this.offset = target;
     }
+  }
+
+  /**
+   * Hand the player the chain the backend resolved: per-stem stages, the
+   * normalize and preset gains, send levels, and the shared bus settings.
+   */
+  setChainPayload(payload) {
+    this.chainPayload = payload || null;
+    if (!this.context) return;
+    this._buildBuses();
+    const specs = new Map((payload?.stems || []).map((entry) => [entry.stemId, entry]));
+    for (const [id, strip] of this.stems) {
+      strip.spec = specs.get(id) || null;
+      this._buildChain(strip);
+    }
+    this._applyGains();
+  }
+
+  _buildBuses() {
+    const context = this.context;
+    if (!context) return;
+    if (this.buses) {
+      Object.values(this.buses).forEach((bus) => disconnectAll(bus.nodes));
+    }
+    this.buses = {};
+
+    const payload = this.chainPayload || {};
+    const definitions = payload.buses || {};
+    const stemSpecs = payload.stems || [];
+
+    ["vocal", "drum", "space"].forEach((name) => {
+      const definition = definitions[name] || { amount: 0.2, roomSize: 0.5 };
+      const reverbIn = context.createGain();
+      const convolver = context.createConvolver();
+      convolver.buffer = createReverbImpulse(context, definition.roomSize);
+      const amount = context.createGain();
+      amount.gain.value = Math.max(0, Math.min(1.1, Number(definition.amount) || 0));
+      reverbIn.connect(convolver);
+      convolver.connect(amount);
+      amount.connect(this.master);
+
+      // One delay line per bus, timed from the first stem that feeds it, so
+      // the repeats stay synced to the tempo the render used.
+      const timed = stemSpecs.find((entry) => entry.sendBus === name && entry.delaySeconds);
+      const delay = createDelayBus(context, timed?.delaySeconds ?? 0.3, 0.2);
+      delay.output.connect(this.master);
+
+      this.buses[name] = {
+        reverbIn,
+        delayIn: delay.input,
+        nodes: [reverbIn, convolver, amount, ...delay.nodes],
+      };
+    });
   }
 
   has(id) {
@@ -342,6 +485,10 @@ export default class StemPlayer {
   destroy() {
     this.destroyed = true;
     this._stopNodes();
+    if (this.buses) {
+      Object.values(this.buses).forEach((bus) => disconnectAll(bus.nodes));
+      this.buses = null;
+    }
     this.stems.clear();
     if (this.context) {
       this.context.close().catch(() => {});

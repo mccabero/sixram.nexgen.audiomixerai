@@ -2044,6 +2044,28 @@ _STEM_REFERENCE_LUFS: dict[str, float] = {
 }
 
 
+def stem_normalize_gain_db(stem_type: str, measured_lufs: float | None) -> float:
+    """The gain _normalize_stem_level would apply, from an already-measured LUFS.
+
+    The render measures loudness while decoding; the live preview cannot afford
+    to, so it is served this number instead. Same reference table, same clamps,
+    same 0.25 dB deadband - otherwise every level in the preview sits at a
+    per-stem offset from the render and the balance you set is not the one you
+    get.
+    """
+    if measured_lufs is None:
+        return 0.0
+    try:
+        loudness = float(measured_lufs)
+    except (TypeError, ValueError):
+        return 0.0
+    if not math.isfinite(loudness) or loudness < -60.0:
+        return 0.0
+    reference = _STEM_REFERENCE_LUFS.get(stem_type, -20.0)
+    gain_db = max(-12.0, min(12.0, reference - loudness))
+    return 0.0 if abs(gain_db) < 0.25 else gain_db
+
+
 def _normalize_stem_level(audio: np.ndarray, sample_rate: int, stem_type: str) -> tuple[np.ndarray, float]:
     """Bring a stem to its reference loudness before the channel strip. Every
     compressor threshold downstream is a fixed dBFS value, so without this the
@@ -2137,7 +2159,61 @@ def _should_bypass_vocal_channel_strip(item: dict) -> bool:
     return item.get("sourceKind") == "Enhanced Vocal" and item.get("stemType") in {"Lead Vocal", "Backing Vocal"}
 
 
-def _advanced_chain(stem_type: str, sample_rate: int, controls: dict, compression_amount: float) -> list[tuple[str, Any]]:
+# One compressor shape is reused across the chain; the render's _compress_audio
+# defaults and the browser's DynamicsCompressorNode both read these.
+_CHAIN_COMP_ATTACK_MS = 8.0
+_CHAIN_COMP_RELEASE_MS = 90.0
+_CHAIN_COMP_KNEE_DB = 6.0
+
+
+def _highpass_stage(label: str, sample_rate: int, cutoff_hz: float) -> dict:
+    """A high-pass stage carrying its own coefficients.
+
+    _high_pass is a 3rd-order Butterworth, which is not a single biquad, so the
+    browser is handed the exact second-order sections scipy designed rather
+    than approximating them with one BiquadFilterNode.
+    """
+    sections: list[list[float]] = []
+    if 0 < cutoff_hz < sample_rate / 2:
+        try:
+            sos = signal.butter(3, cutoff_hz, btype="highpass", fs=sample_rate, output="sos")
+            sections = [[float(value) for value in row] for row in sos]
+        except Exception:
+            sections = []
+    return {"label": label, "kind": "highpass", "frequency": cutoff_hz, "sos": sections}
+
+
+def _eq_stage(label: str, sample_rate: int, bands: list[tuple[float, float, float]]) -> dict:
+    """An EQ stage as resolved biquads, skipping bands that do nothing."""
+    resolved = []
+    for low_hz, high_hz, gain_db in bands:
+        params = _eq_band_params(sample_rate, low_hz, high_hz, gain_db)
+        if params is not None:
+            resolved.append(params)
+    return {"label": label, "kind": "eq", "bands": resolved}
+
+
+def _comp_stage(label: str, threshold_db: float, ratio: float, mix: float) -> dict:
+    return {
+        "label": label,
+        "kind": "compressor",
+        "thresholdDb": threshold_db,
+        "ratio": ratio,
+        "mix": mix,
+        "attackMs": _CHAIN_COMP_ATTACK_MS,
+        "releaseMs": _CHAIN_COMP_RELEASE_MS,
+        "kneeDb": _CHAIN_COMP_KNEE_DB,
+    }
+
+
+def advanced_chain_spec(stem_type: str, sample_rate: int, controls: dict, compression_amount: float) -> list[dict]:
+    """The automatic channel strip for a stem type, as data.
+
+    This is the single description of the chain: the render builds its
+    processors from it (_advanced_chain, below) and the mixer's live preview
+    is served the same list to build Web Audio nodes from. Change a frequency
+    here and both move together.
+    """
     brightness = float(controls.get("brightness", 0)) / 50.0
     warmth = float(controls.get("warmth", 0)) / 50.0
     drum_punch = _control_ratio(controls, "drumPunch")
@@ -2145,100 +2221,158 @@ def _advanced_chain(stem_type: str, sample_rate: int, controls: dict, compressio
     width = _control_ratio(controls, "width")
     backing_width = _control_ratio(controls, "backingVocalWidth")
 
-    def tone(audio: np.ndarray) -> np.ndarray:
-        return _apply_stem_tone(audio, sample_rate, brightness, warmth)
+    def tone(prefix: str) -> dict:
+        return _eq_stage(
+            f"{prefix} tone",
+            sample_rate,
+            [
+                (120, 360, warmth * 1.1),
+                (5200, min(12000, sample_rate / 2 - 200), brightness * 1.2),
+            ],
+        )
 
     if stem_type == "Lead Vocal":
         return [
-            ("vocal high-pass", lambda audio: _high_pass(audio, sample_rate, 85)),
-            ("vocal cleanup EQ", lambda audio: _eq_band(audio, sample_rate, 220, 420, -1.8)),
-            ("vocal presence EQ", lambda audio: _eq_band(audio, sample_rate, 2500, 5200, 1.4 + brightness * 1.2)),
-            ("vocal de-esser", lambda audio: _de_ess(audio, sample_rate, 0.45 + compression_amount * 0.3)),
-            ("vocal compressor", lambda audio: _compress_audio(audio, threshold_db=-22, ratio=3.2, mix=0.45 + compression_amount * 0.4, sample_rate=sample_rate)),
-            ("vocal tone", tone),
+            _highpass_stage("vocal high-pass", sample_rate, 85),
+            _eq_stage("vocal cleanup EQ", sample_rate, [(220, 420, -1.8)]),
+            _eq_stage("vocal presence EQ", sample_rate, [(2500, 5200, 1.4 + brightness * 1.2)]),
+            {"label": "vocal de-esser", "kind": "deesser", "strength": 0.45 + compression_amount * 0.3},
+            _comp_stage("vocal compressor", -22, 3.2, 0.45 + compression_amount * 0.4),
+            tone("vocal"),
         ]
     if stem_type == "Backing Vocal":
         return [
-            ("backing vocal high-pass", lambda audio: _high_pass(audio, sample_rate, 100)),
-            ("backing vocal cleanup EQ", lambda audio: _eq_band(audio, sample_rate, 250, 500, -1.5)),
-            ("backing vocal compressor", lambda audio: _compress_audio(audio, threshold_db=-24, ratio=3.0, mix=0.4 + compression_amount * 0.35, sample_rate=sample_rate)),
-            ("backing vocal spread", lambda audio: _apply_width(audio, 0.08 + width * 0.16 + backing_width * 0.28)),
-            ("backing vocal tone", tone),
+            _highpass_stage("backing vocal high-pass", sample_rate, 100),
+            _eq_stage("backing vocal cleanup EQ", sample_rate, [(250, 500, -1.5)]),
+            _comp_stage("backing vocal compressor", -24, 3.0, 0.4 + compression_amount * 0.35),
+            {"label": "backing vocal spread", "kind": "width", "amount": 0.08 + width * 0.16 + backing_width * 0.28},
+            tone("backing vocal"),
         ]
     if stem_type == "Drums":
         return [
-            ("drum low-end cleanup", lambda audio: _high_pass(audio, sample_rate, 28)),
-            ("drum mud control", lambda audio: _eq_band(audio, sample_rate, 260, 520, -1.0)),
-            ("drum bus compression", lambda audio: _compress_audio(audio, threshold_db=-18, ratio=2.2 + drum_punch * 1.4, mix=0.18 + compression_amount * 0.22, sample_rate=sample_rate)),
-            ("drum transient tone", lambda audio: _eq_band(audio, sample_rate, 4500, 9000, drum_punch * 1.0 + brightness * 0.8)),
-            ("drum tone", tone),
+            _highpass_stage("drum low-end cleanup", sample_rate, 28),
+            _eq_stage("drum mud control", sample_rate, [(260, 520, -1.0)]),
+            _comp_stage("drum bus compression", -18, 2.2 + drum_punch * 1.4, 0.18 + compression_amount * 0.22),
+            _eq_stage("drum transient tone", sample_rate, [(4500, 9000, drum_punch * 1.0 + brightness * 0.8)]),
+            tone("drum"),
         ]
     if stem_type == "Kick":
         return [
-            ("kick rumble cleanup", lambda audio: _high_pass(audio, sample_rate, 24)),
-            ("kick low-end control", lambda audio: _eq_band(audio, sample_rate, 180, 360, -1.2)),
-            ("kick weight", lambda audio: _eq_band(audio, sample_rate, 45, 90, -0.5 + bass_weight * 1.2)),
-            ("kick compression", lambda audio: _compress_audio(audio, threshold_db=-17, ratio=3.4, mix=0.25 + compression_amount * 0.28, sample_rate=sample_rate)),
+            _highpass_stage("kick rumble cleanup", sample_rate, 24),
+            _eq_stage("kick low-end control", sample_rate, [(180, 360, -1.2)]),
+            _eq_stage("kick weight", sample_rate, [(45, 90, -0.5 + bass_weight * 1.2)]),
+            _comp_stage("kick compression", -17, 3.4, 0.25 + compression_amount * 0.28),
         ]
     if stem_type == "Snare":
         return [
-            ("snare high-pass", lambda audio: _high_pass(audio, sample_rate, 70)),
-            ("snare body control", lambda audio: _eq_band(audio, sample_rate, 350, 700, -0.8)),
-            ("snare crack", lambda audio: _eq_band(audio, sample_rate, 3000, 6500, 0.8 + drum_punch * 1.0)),
-            ("snare compression", lambda audio: _compress_audio(audio, threshold_db=-19, ratio=2.8, mix=0.2 + compression_amount * 0.25, sample_rate=sample_rate)),
+            _highpass_stage("snare high-pass", sample_rate, 70),
+            _eq_stage("snare body control", sample_rate, [(350, 700, -0.8)]),
+            _eq_stage("snare crack", sample_rate, [(3000, 6500, 0.8 + drum_punch * 1.0)]),
+            _comp_stage("snare compression", -19, 2.8, 0.2 + compression_amount * 0.25),
         ]
     if stem_type == "Bass":
         return [
-            ("bass sub cleanup", lambda audio: _high_pass(audio, sample_rate, 28)),
-            ("bass low-end control", lambda audio: _eq_band(audio, sample_rate, 45, 110, -0.4 + bass_weight * 1.4)),
-            ("bass mud control", lambda audio: _eq_band(audio, sample_rate, 180, 420, -1.0)),
-            ("bass compression", lambda audio: _compress_audio(audio, threshold_db=-21, ratio=3.8, mix=0.35 + compression_amount * 0.38, sample_rate=sample_rate)),
-            ("bass saturation", lambda audio: _saturate(audio, drive=1.15 + bass_weight * 0.45, mix=0.08 + bass_weight * 0.08)),
-            ("bass mono focus", lambda audio: _apply_width(audio, -0.35)),
+            _highpass_stage("bass sub cleanup", sample_rate, 28),
+            _eq_stage("bass low-end control", sample_rate, [(45, 110, -0.4 + bass_weight * 1.4)]),
+            _eq_stage("bass mud control", sample_rate, [(180, 420, -1.0)]),
+            _comp_stage("bass compression", -21, 3.8, 0.35 + compression_amount * 0.38),
+            {"label": "bass saturation", "kind": "saturation", "drive": 1.15 + bass_weight * 0.45, "mix": 0.08 + bass_weight * 0.08},
+            {"label": "bass mono focus", "kind": "width", "amount": -0.35},
         ]
     if stem_type == "Electric Guitar":
         return [
-            ("electric guitar high-pass", lambda audio: _high_pass(audio, sample_rate, 72)),
-            ("electric guitar mud control", lambda audio: _eq_band(audio, sample_rate, 220, 520, -1.8)),
-            ("electric guitar bite", lambda audio: _eq_band(audio, sample_rate, 2200, 5200, 0.5 + brightness * 0.9)),
-            ("electric guitar compression", lambda audio: _compress_audio(audio, threshold_db=-20, ratio=2.4, mix=0.16 + compression_amount * 0.22, sample_rate=sample_rate)),
-            ("electric guitar width", lambda audio: _apply_width(audio, width * 0.18)),
-            ("electric guitar tone", tone),
+            _highpass_stage("electric guitar high-pass", sample_rate, 72),
+            _eq_stage("electric guitar mud control", sample_rate, [(220, 520, -1.8)]),
+            _eq_stage("electric guitar bite", sample_rate, [(2200, 5200, 0.5 + brightness * 0.9)]),
+            _comp_stage("electric guitar compression", -20, 2.4, 0.16 + compression_amount * 0.22),
+            {"label": "electric guitar width", "kind": "width", "amount": width * 0.18},
+            tone("electric guitar"),
         ]
     if stem_type == "Acoustic Guitar":
         return [
-            ("acoustic high-pass", lambda audio: _high_pass(audio, sample_rate, 86)),
-            ("acoustic boom control", lambda audio: _eq_band(audio, sample_rate, 140, 320, -1.6)),
-            ("acoustic presence", lambda audio: _eq_band(audio, sample_rate, 2500, 6500, 0.7 + brightness * 0.8)),
-            ("acoustic compression", lambda audio: _compress_audio(audio, threshold_db=-22, ratio=2.2, mix=0.18 + compression_amount * 0.2, sample_rate=sample_rate)),
-            ("acoustic tone", tone),
+            _highpass_stage("acoustic high-pass", sample_rate, 86),
+            _eq_stage("acoustic boom control", sample_rate, [(140, 320, -1.6)]),
+            _eq_stage("acoustic presence", sample_rate, [(2500, 6500, 0.7 + brightness * 0.8)]),
+            _comp_stage("acoustic compression", -22, 2.2, 0.18 + compression_amount * 0.2),
+            tone("acoustic"),
         ]
     if stem_type == "Keys/Piano":
         return [
-            ("keys high-pass", lambda audio: _high_pass(audio, sample_rate, 58)),
-            ("keys vocal-space EQ", lambda audio: _eq_band(audio, sample_rate, 1800, 4200, -0.7)),
-            ("keys width", lambda audio: _apply_width(audio, width * 0.22)),
-            ("keys light compression", lambda audio: _compress_audio(audio, threshold_db=-24, ratio=1.8, mix=0.08 + compression_amount * 0.14, sample_rate=sample_rate)),
-            ("keys tone", tone),
+            _highpass_stage("keys high-pass", sample_rate, 58),
+            _eq_stage("keys vocal-space EQ", sample_rate, [(1800, 4200, -0.7)]),
+            {"label": "keys width", "kind": "width", "amount": width * 0.22},
+            _comp_stage("keys light compression", -24, 1.8, 0.08 + compression_amount * 0.14),
+            tone("keys"),
         ]
     if stem_type == "Pads/Strings":
         return [
-            ("pad high-pass", lambda audio: _high_pass(audio, sample_rate, 70)),
-            ("pad background EQ", lambda audio: _eq_band(audio, sample_rate, 1200, 3600, -0.8)),
-            ("pad width", lambda audio: _apply_width(audio, 0.16 + width * 0.3)),
-            ("pad tone", tone),
+            _highpass_stage("pad high-pass", sample_rate, 70),
+            _eq_stage("pad background EQ", sample_rate, [(1200, 3600, -0.8)]),
+            {"label": "pad width", "kind": "width", "amount": 0.16 + width * 0.3},
+            tone("pad"),
         ]
     if stem_type == "FX/Ambience":
         return [
-            ("ambience high-pass", lambda audio: _high_pass(audio, sample_rate, 35)),
-            ("ambience width", lambda audio: _apply_width(audio, 0.22 + width * 0.32)),
-            ("ambience tone", tone),
+            _highpass_stage("ambience high-pass", sample_rate, 35),
+            {"label": "ambience width", "kind": "width", "amount": 0.22 + width * 0.32},
+            tone("ambience"),
         ]
     return [
-        ("general high-pass", lambda audio: _high_pass(audio, sample_rate, 50)),
-        ("general cleanup EQ", lambda audio: _eq_band(audio, sample_rate, 250, 500, -0.8)),
-        ("general compression", lambda audio: _compress_audio(audio, threshold_db=-22, ratio=2.0, mix=0.1 + compression_amount * 0.16, sample_rate=sample_rate)),
-        ("general tone", tone),
+        _highpass_stage("general high-pass", sample_rate, 50),
+        _eq_stage("general cleanup EQ", sample_rate, [(250, 500, -0.8)]),
+        _comp_stage("general compression", -22, 2.0, 0.1 + compression_amount * 0.16),
+        tone("general"),
+    ]
+
+
+def _stage_processor(stage: dict, sample_rate: int) -> Any:
+    """Turn one spec stage into the function the render applies."""
+    kind = stage["kind"]
+    if kind == "highpass":
+        frequency = float(stage["frequency"])
+        return lambda audio: _high_pass(audio, sample_rate, frequency)
+    if kind == "eq":
+        bands = stage["bands"]
+
+        def run_eq(audio: np.ndarray) -> np.ndarray:
+            for band in bands:
+                sos = _rbj_biquad_sos(sample_rate, _EQ_KINDS[band["type"]], band["frequency"], band["q"], band["gainDb"])
+                try:
+                    audio = signal.sosfilt(sos, audio, axis=0).astype(np.float32, copy=False)
+                except Exception:
+                    continue
+            return audio
+
+        return run_eq
+    if kind == "compressor":
+        return lambda audio: _compress_audio(
+            audio,
+            threshold_db=float(stage["thresholdDb"]),
+            ratio=float(stage["ratio"]),
+            mix=float(stage["mix"]),
+            sample_rate=sample_rate,
+            attack_ms=float(stage["attackMs"]),
+            release_ms=float(stage["releaseMs"]),
+            knee_db=float(stage["kneeDb"]),
+        )
+    if kind == "deesser":
+        strength = float(stage["strength"])
+        return lambda audio: _de_ess(audio, sample_rate, strength)
+    if kind == "width":
+        amount = float(stage["amount"])
+        return lambda audio: _apply_width(audio, amount)
+    if kind == "saturation":
+        drive = float(stage["drive"])
+        mix = float(stage["mix"])
+        return lambda audio: _saturate(audio, drive=drive, mix=mix)
+    return lambda audio: audio
+
+
+def _advanced_chain(stem_type: str, sample_rate: int, controls: dict, compression_amount: float) -> list[tuple[str, Any]]:
+    """The render's view of the chain, built from the one spec above."""
+    return [
+        (stage["label"], _stage_processor(stage, sample_rate))
+        for stage in advanced_chain_spec(stem_type, sample_rate, controls, compression_amount)
     ]
 
 
@@ -2264,24 +2398,39 @@ def _rbj_biquad_sos(sample_rate: int, kind: str, f0: float, q: float, gain_db: f
     return np.array([[b[0] / a0, b[1] / a0, b[2] / a0, 1.0, a[1] / a0, a[2] / a0]], dtype=np.float64)
 
 
-def _eq_band(audio: np.ndarray, sample_rate: int, low_hz: float, high_hz: float, gain_db: float) -> np.ndarray:
-    """Bell/shelf EQ over the given band. Bands that reach the spectrum edges
-    become shelves; interior bands become an RBJ peaking bell at the band's
-    geometric center. Filters run causally (minimum-phase, like an analog EQ)
-    so transients keep their attack instead of picking up filtfilt pre-ring."""
+def _eq_band_params(sample_rate: int, low_hz: float, high_hz: float, gain_db: float) -> dict | None:
+    """Resolve a band request into one RBJ biquad, or None when it is a no-op.
+
+    Bands that reach the spectrum edges become shelves; interior bands become
+    a peaking bell at the band's geometric center. Split out from _eq_band so
+    the browser preview can be handed the same resolved numbers instead of
+    re-deriving them and drifting.
+    """
     if abs(gain_db) < 0.05 or high_hz <= low_hz or low_hz >= sample_rate / 2:
-        return audio
+        return None
     high = min(high_hz, sample_rate / 2 - 100)
     if high <= low_hz:
-        return audio
+        return None
     if high >= sample_rate * 0.30:
-        sos = _rbj_biquad_sos(sample_rate, "highshelf", max(200.0, low_hz), 0.707, gain_db)
-    elif low_hz <= 60.0:
-        sos = _rbj_biquad_sos(sample_rate, "lowshelf", high, 0.707, gain_db)
-    else:
-        center = math.sqrt(low_hz * high)
-        q = max(0.4, min(4.0, center / max(1.0, high - low_hz)))
-        sos = _rbj_biquad_sos(sample_rate, "peak", center, q, gain_db)
+        return {"type": "highshelf", "frequency": max(200.0, low_hz), "q": 0.707, "gainDb": gain_db}
+    if low_hz <= 60.0:
+        return {"type": "lowshelf", "frequency": high, "q": 0.707, "gainDb": gain_db}
+    center = math.sqrt(low_hz * high)
+    q = max(0.4, min(4.0, center / max(1.0, high - low_hz)))
+    return {"type": "peaking", "frequency": center, "q": q, "gainDb": gain_db}
+
+
+_EQ_KINDS = {"peaking": "peak", "lowshelf": "lowshelf", "highshelf": "highshelf"}
+
+
+def _eq_band(audio: np.ndarray, sample_rate: int, low_hz: float, high_hz: float, gain_db: float) -> np.ndarray:
+    """Bell/shelf EQ over the given band. Filters run causally (minimum-phase,
+    like an analog EQ) so transients keep their attack instead of picking up
+    filtfilt pre-ring."""
+    params = _eq_band_params(sample_rate, low_hz, high_hz, gain_db)
+    if params is None:
+        return audio
+    sos = _rbj_biquad_sos(sample_rate, _EQ_KINDS[params["type"]], params["frequency"], params["q"], params["gainDb"])
     try:
         return signal.sosfilt(sos, audio, axis=0).astype(np.float32, copy=False)
     except Exception:

@@ -7,7 +7,15 @@ from typing import Any
 
 from fastapi import HTTPException
 
-from .audio_engine import ensure_audio_environment, generate_advanced_mix
+from .audio_engine import (
+    ROUGH_MIX_SAMPLE_RATE,
+    _stem_delay_amount,
+    _stem_reverb_amount,
+    advanced_chain_spec,
+    ensure_audio_environment,
+    generate_advanced_mix,
+    stem_normalize_gain_db,
+)
 from .logging_utils import append_project_log, utc_now_iso
 from .models import MixVersion, ProcessingJob, Project, UpdateMixControlsRequest, UpdateMixVersionRequest
 from .phase2 import _clear_rough_mix_reference, _ensure_mix_setting, _mix_source_path, default_eq_bands
@@ -564,6 +572,140 @@ def _advanced_mix_inputs(project: dict[str, Any], preset: dict[str, Any], instru
         )
 
     return inputs
+
+
+def _source_lufs(stem: dict[str, Any]) -> float | None:
+    """Loudness of whichever file the mix will actually use."""
+    vocal_settings = stem.get("vocalEnhancementSettings") or {}
+    vocal_result = stem.get("vocalEnhancementResult") or {}
+    if (
+        vocal_settings.get("enabled")
+        and vocal_settings.get("useEnhancedInMix", True)
+        and vocal_result.get("status") == "Completed"
+        and vocal_result.get("integratedLufs") is not None
+    ):
+        return vocal_result.get("integratedLufs")
+
+    cleaning_settings = stem.get("cleaningSettings") or {}
+    cleaning_result = stem.get("cleaningResult") or {}
+    if (
+        cleaning_settings.get("enabled")
+        and cleaning_settings.get("useCleanedInMix", True)
+        and cleaning_result.get("status") == "Completed"
+        and cleaning_result.get("integratedLufs") is not None
+    ):
+        return cleaning_result.get("integratedLufs")
+
+    return (stem.get("analysisResult") or {}).get("integratedLufs")
+
+
+def get_mix_chain(project_id: str) -> dict[str, Any]:
+    """Everything the mixer's live preview needs to rebuild the render chain.
+
+    The preview does not guess at the processing: it is handed the same
+    resolved stage list the render builds from, the normalize gain the render
+    would apply, and the tempo the delays are synced to.
+    """
+    data = store.load()
+    project = _find_project(data, project_id)
+    controls = _ensure_mix_controls(project)
+
+    versions = project.get("mixSettings", {}).get("mixVersions", [])
+    tempo_bpm = next(
+        (version.get("tempoBpm") for version in reversed(versions) if version.get("tempoBpm")),
+        None,
+    )
+
+    # The same role gains the render applies on top of the engineer's fader.
+    # Without them the preview sits at a per-stem offset from the mix version.
+    preset_name = controls.get("preset", "Balanced")
+    preset = MIX_PRESETS.get(preset_name, MIX_PRESETS["Balanced"])
+    settings_map = {item["stemId"]: item for item in project.get("mixSettings", {}).get("stems", [])}
+    all_stems = project.get("stems", [])
+    solo_active = any(settings_map.get(stem["id"], {}).get("solo") for stem in all_stems)
+    active_stems = [stem for stem in all_stems if _is_audible(stem, settings_map.get(stem["id"]), solo_active)]
+    lead_vocal_active = any(effective_stem_type(stem) == "Lead Vocal" for stem in active_stems)
+    low_end_adjustments = _low_end_adjustments(active_stems)
+    vocal_boost = float(controls.get("vocalBoost", 0))
+
+    stems = []
+    for stem in all_stems:
+        stem_type = effective_stem_type(stem)
+        setting = _ensure_mix_setting(project, stem["id"])
+        compression_amount = max(0.0, min(1.0, float(setting.get("compressionAmount", 50)) / 100.0))
+        bypassed = stem.get("sourceKind") == "Enhanced Vocal" and stem_type in {"Lead Vocal", "Backing Vocal"}
+
+        preset_gain = float(preset.get("roleGains", {}).get(stem_type, 0))
+        preset_gain += _vocal_priority_adjustment(stem_type, lead_vocal_active)
+        preset_gain += low_end_adjustments.get(stem["id"], 0)
+        if stem_type == "Lead Vocal":
+            preset_gain += vocal_boost
+
+        stems.append(
+            {
+                "stemId": stem["id"],
+                "stemType": stem_type,
+                "normalizeGainDb": round(stem_normalize_gain_db(stem_type, _source_lufs(stem)), 3),
+                "presetGainDb": round(preset_gain, 3),
+                "chainEnabled": bool(setting.get("processingChainEnabled", True)) and not bypassed,
+                "chain": advanced_chain_spec(stem_type, ROUGH_MIX_SAMPLE_RATE, controls, compression_amount),
+                "presenceAmount": float(setting.get("presenceAmount", 0)),
+                "presenceBand": _presence_band(stem_type),
+                "sendBus": _send_bus(stem_type),
+                "reverbSendAmount": round(_stem_reverb_amount(stem_type, float(setting.get("reverbSend", 35)), controls), 4),
+                "delaySendAmount": round(_stem_delay_amount(stem_type, float(setting.get("delaySend", 0)), controls), 4),
+                "delaySeconds": round(_delay_beats(stem_type) * 60.0 / (tempo_bpm or 120.0), 4),
+            }
+        )
+
+    global_reverb = max(0.0, min(1.0, float(controls.get("reverbAmount", 24)) / 100.0))
+    vocal_reverb = max(0.0, min(1.0, float(controls.get("vocalReverbAmount", 22)) / 100.0))
+    room_size = max(0.0, min(1.0, float(controls.get("roomSize", 38)) / 100.0))
+
+    return {
+        "sampleRate": ROUGH_MIX_SAMPLE_RATE,
+        "tempoBpm": tempo_bpm,
+        "controls": controls,
+        "buses": {
+            "vocal": {"amount": 0.18 + 0.85 * vocal_reverb + 0.32 * global_reverb, "roomSize": 0.60 + room_size * 0.55},
+            "drum": {"amount": 0.10 + 0.30 * global_reverb, "roomSize": 0.25 + room_size * 0.25},
+            "space": {"amount": 0.15 + 0.55 * global_reverb, "roomSize": 0.55 + room_size * 0.55},
+        },
+        "stems": stems,
+    }
+
+
+def _send_bus(stem_type: str) -> str:
+    if stem_type in {"Lead Vocal", "Backing Vocal"}:
+        return "vocal"
+    if stem_type in {"Drums", "Kick", "Snare"}:
+        return "drum"
+    return "space"
+
+
+def _delay_beats(stem_type: str) -> float:
+    """Beat fractions _synced_delay_seconds uses per stem family."""
+    if stem_type in {"Lead Vocal", "Backing Vocal"}:
+        return 0.24
+    if stem_type in {"Electric Guitar", "Acoustic Guitar"}:
+        return 0.18
+    return 0.31
+
+
+def _presence_band(stem_type: str) -> dict[str, float]:
+    """Mirrors _apply_stem_presence's per-type band table."""
+    low, high, scale = {
+        "Lead Vocal": (2400, 5400, 2.0),
+        "Backing Vocal": (2200, 5000, 1.5),
+        "Snare": (3000, 7000, 1.6),
+        "Electric Guitar": (2100, 5600, 1.4),
+        "Acoustic Guitar": (2600, 7200, 1.4),
+        "Keys/Piano": (1600, 4200, 1.0),
+        "Pads/Strings": (1400, 4200, 0.8),
+        "FX/Ambience": (1800, 6800, 0.9),
+        "Bass": (650, 1400, 0.8),
+    }.get(stem_type, (2200, 5200, 1.0))
+    return {"lowHz": low, "highHz": high, "scale": scale}
 
 
 def _ensure_mix_controls(project: dict[str, Any]) -> dict[str, Any]:
