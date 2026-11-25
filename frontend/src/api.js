@@ -761,3 +761,27 @@ export function clearChordSheetLyrics(sheetId) {
 export function getMixChain(projectId) {
   return request(`/projects/${projectId}/mix-chain`);
 }
+
+export function listSplitBatches() {
+  return request("/split-batches");
+}
+
+export function createSplitBatch(payload) {
+  return request("/split-batches", { method: "POST", body: JSON.stringify(payload) });
+}
+
+export function getSplitBatch(batchId) {
+  return request(`/split-batches/${batchId}`);
+}
+
+export function resumeSplitBatch(batchId) {
+  return request(`/split-batches/${batchId}/resume`, { method: "POST" });
+}
+
+export function cancelSplitBatch(batchId) {
+  return request(`/split-batches/${batchId}/cancel`, { method: "POST" });
+}
+
+export function deleteSplitBatch(batchId, deleteSplits = false) {
+  return request(`/split-batches/${batchId}?deleteSplits=${deleteSplits}`, { method: "DELETE" });
+}

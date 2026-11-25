@@ -140,7 +140,14 @@ from .workflow_reset import (
 )
 
 
-from .models import CreateSplitRequest, ExportSplitMixRequest, Split, SplitJob
+from .models import (
+    CreateSplitBatchRequest,
+    CreateSplitRequest,
+    ExportSplitMixRequest,
+    Split,
+    SplitBatch,
+    SplitJob,
+)
 from .stem_splitter import (
     active_split_summary,
     archive_split_stems,
@@ -150,7 +157,14 @@ from .stem_splitter import (
     get_split,
     get_split_job,
     list_splits,
+    create_split_batch,
+    delete_split_batch,
+    get_split_batch,
+    list_split_batches,
+    mark_interrupted_batches,
     mark_interrupted_splits,
+    request_batch_cancel,
+    run_split_batch,
     request_split_cancel,
     retry_split,
     run_split,
@@ -197,6 +211,7 @@ def startup_checks() -> None:
     AUDIO_ENVIRONMENT = check_audio_environment()
     mark_interrupted_jobs()
     mark_interrupted_splits()
+    mark_interrupted_batches()
     mark_interrupted_sheets()
 
 
@@ -706,6 +721,47 @@ def api_delete_exports(project_id: str) -> Project:
 # --- Phase 8: Stem Splitter -------------------------------------------------
 # A standalone module. These routes never touch project state; splits live in
 # their own storage tree and their own slice of app_data.json.
+
+
+@app.get("/api/split-batches", response_model=list[SplitBatch])
+def api_list_split_batches() -> list[SplitBatch]:
+    return list_split_batches()
+
+
+@app.post("/api/split-batches", response_model=SplitBatch)
+def api_create_split_batch(payload: CreateSplitBatchRequest, background_tasks: BackgroundTasks) -> SplitBatch:
+    batch = create_split_batch(payload)
+    background_tasks.add_task(run_split_batch, batch.id)
+    return batch
+
+
+@app.get("/api/split-batches/{batch_id}", response_model=SplitBatch)
+def api_get_split_batch(batch_id: str) -> SplitBatch:
+    return get_split_batch(batch_id)
+
+
+@app.post("/api/split-batches/{batch_id}/resume", response_model=SplitBatch)
+def api_resume_split_batch(batch_id: str, background_tasks: BackgroundTasks) -> SplitBatch:
+    """Pick up where an interrupted or cancelled batch stopped.
+
+    Fetching skips audio already on disk and separation skips tracks already
+    completed, so resuming costs nothing for work already done.
+    """
+    batch = get_split_batch(batch_id)
+    if batch.status in {"Pending", "Fetching", "Splitting"}:
+        raise HTTPException(status_code=409, detail="That batch is already running.")
+    background_tasks.add_task(run_split_batch, batch_id)
+    return batch
+
+
+@app.post("/api/split-batches/{batch_id}/cancel", response_model=SplitBatch)
+def api_cancel_split_batch(batch_id: str) -> SplitBatch:
+    return request_batch_cancel(batch_id)
+
+
+@app.delete("/api/split-batches/{batch_id}")
+def api_delete_split_batch(batch_id: str, deleteSplits: bool = False) -> dict:
+    return delete_split_batch(batch_id, deleteSplits)
 
 
 @app.get("/api/splits/environment")

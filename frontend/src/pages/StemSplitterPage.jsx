@@ -2,6 +2,7 @@ import {
   AudioLines,
   Clock3,
   Link2,
+  ListMusic,
   Loader2,
   Music4,
   RotateCcw,
@@ -9,24 +10,36 @@ import {
   SlidersHorizontal,
   Trash2,
   TriangleAlert,
-  X,
+  X
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import {
   cancelSplit,
+  cancelSplitBatch,
   createChordSheet,
   createSplit,
+  createSplitBatch,
   deleteSplit,
   getSplitEnvironment,
+  deleteSplitBatch,
   listChordSheets,
+  listSplitBatches,
   listSplits,
+  resumeSplitBatch,
   retrySplit,
 } from "../api.js";
 import Button from "../components/Button.jsx";
 import { formatDateTime } from "../utils/format.js";
 
 const ACTIVE_STATUSES = new Set(["Pending", "Downloading", "Preparing", "Separating", "Finishing"]);
+const ACTIVE_BATCH_STATUSES = new Set(["Pending", "Fetching", "Splitting"]);
+
+// A /playlist link is unambiguous. A /watch link that carries list= is a
+// single video that happens to sit in a playlist, so batch mode is offered
+// but not assumed.
+const hasPlaylistId = (value) => /[?&]list=/.test(value);
+const isPlaylistPage = (value) => /\/playlist\?/.test(value);
 
 const STEM_SETS = [
   { value: "6", label: "6 stems", detail: "Vocals · Drums · Bass · Guitar · Piano · Other" },
@@ -62,6 +75,9 @@ function StatusPill({ split }) {
 export default function StemSplitterPage() {
   const navigate = useNavigate();
   const [splits, setSplits] = useState([]);
+  const [batches, setBatches] = useState([]);
+  const [batchMode, setBatchMode] = useState(false);
+  const [batchBusy, setBatchBusy] = useState("");
   const [environment, setEnvironment] = useState(null);
   const [url, setUrl] = useState("");
   const [stemSet, setStemSet] = useState("6");
@@ -99,37 +115,63 @@ export default function StemSplitterPage() {
     }
   }, []);
 
+  const loadBatches = useCallback(async () => {
+    try {
+      const rows = await listSplitBatches();
+      setBatches(rows);
+      return rows;
+    } catch {
+      return [];
+    }
+  }, []);
+
   useEffect(() => {
     getSplitEnvironment().then(setEnvironment).catch(() => setEnvironment(null));
     load();
-  }, [load]);
+    loadBatches();
+  }, [load, loadBatches]);
+
+  // Batch mode is pre-selected for a playlist page, offered for a watch link.
+  useEffect(() => {
+    setBatchMode(isPlaylistPage(url));
+  }, [url]);
 
   // Poll only while something is actually running.
   useEffect(() => {
-    const hasActive = splits.some((split) => ACTIVE_STATUSES.has(split.status));
+    const hasActive =
+      splits.some((split) => ACTIVE_STATUSES.has(split.status)) ||
+      batches.some((batch) => ACTIVE_BATCH_STATUSES.has(batch.status));
     if (!hasActive) {
       if (timerRef.current) window.clearInterval(timerRef.current);
       timerRef.current = null;
       return undefined;
     }
     if (timerRef.current) return undefined;
-    timerRef.current = window.setInterval(load, 3000);
+    timerRef.current = window.setInterval(() => {
+      load();
+      loadBatches();
+    }, 3000);
     return () => {
       if (timerRef.current) window.clearInterval(timerRef.current);
       timerRef.current = null;
     };
-  }, [splits, load]);
+  }, [splits, batches, load, loadBatches]);
 
   async function onSubmit(event) {
     event.preventDefault();
     setError("");
     setSubmitting(true);
     try {
-      const split = await createSplit({
-        url: url.trim(),
-        stemSet,
-        depth: deep && stemSet === "6" ? "deep" : "standard",
-      });
+      const depth = deep && stemSet === "6" ? "deep" : "standard";
+
+      if (batchMode) {
+        await createSplitBatch({ url: url.trim(), stemSet, depth });
+        setUrl("");
+        await Promise.all([load(), loadBatches()]);
+        return;
+      }
+
+      const split = await createSplit({ url: url.trim(), stemSet, depth });
       setUrl("");
       const rows = await load();
       // A cached split comes back Ready, so go straight to the player.
@@ -142,6 +184,19 @@ export default function StemSplitterPage() {
       setError(exc.message);
     } finally {
       setSubmitting(false);
+    }
+  }
+
+  async function runBatchAction(batchId, action) {
+    setBatchBusy(batchId);
+    setError("");
+    try {
+      await action(batchId);
+      await Promise.all([load(), loadBatches()]);
+    } catch (exc) {
+      setError(exc.message);
+    } finally {
+      setBatchBusy("");
     }
   }
 
@@ -307,6 +362,31 @@ export default function StemSplitterPage() {
           </span>
         </label>
 
+        {hasPlaylistId(url) ? (
+          <label
+            className={`flex items-start gap-3 rounded-lg border px-4 py-3 transition ${
+              batchMode
+                ? "cursor-pointer border-teal-300/45 bg-teal-300/[0.10]"
+                : "cursor-pointer border-white/12 bg-white/[0.04] hover:border-white/20"
+            }`}
+          >
+            <input
+              type="checkbox"
+              checked={batchMode}
+              onChange={(event) => setBatchMode(event.target.checked)}
+              className="mt-0.5 h-4 w-4 accent-teal-300"
+            />
+            <span className="min-w-0">
+              <span className="block text-[13px] font-semibold text-zinc-200">
+                Split every track in this playlist
+              </span>
+              <span className="mt-0.5 block text-[12px] leading-5 text-zinc-500">
+                Downloads every track first, then separates them one at a time. You can close the page and resume later.
+              </span>
+            </span>
+          </label>
+        ) : null}
+
         <div className="flex items-start gap-2.5 rounded-lg border border-amber-300/25 bg-amber-300/[0.07] px-3.5 py-2.5">
           <Clock3 size={16} className="mt-0.5 shrink-0 text-amber-300" />
           <p className="text-[13px] leading-6 text-amber-100/90">
@@ -321,6 +401,95 @@ export default function StemSplitterPage() {
           <TriangleAlert size={16} className="shrink-0" />
           {error}
         </div>
+      ) : null}
+
+      {batches.length ? (
+        <section className="flex flex-col gap-3">
+          <h2 className="text-[15px] font-semibold text-white">Playlist batches</h2>
+          {batches.map((batch) => {
+            const active = ACTIVE_BATCH_STATUSES.has(batch.status);
+            const done = batch.items.filter((item) => item.splitStatus === "Completed").length;
+            const fetched = batch.items.filter((item) => item.fetchStatus === "Fetched").length;
+            const busy = batchBusy === batch.id;
+            return (
+              <div key={batch.id} className="rounded-xl border border-white/10 bg-white/[0.03] px-5 py-4">
+                <div className="flex flex-wrap items-start gap-4">
+                  <div className="min-w-0 flex-grow">
+                    <div className="flex flex-wrap items-center gap-2.5">
+                      <ListMusic size={16} className="shrink-0 text-teal-300" />
+                      <span className="truncate text-[15px] font-semibold text-zinc-100">{batch.title}</span>
+                      <span className="rounded-full border border-white/12 bg-black/30 px-2.5 py-0.5 text-[11px] font-semibold text-zinc-300">
+                        {batch.status}
+                      </span>
+                    </div>
+                    <p className="mt-1 text-[13px] text-zinc-400">
+                      {batch.progressMessage || `${batch.items.length} tracks`}
+                    </p>
+                    <p className="mt-1 text-[12px] text-zinc-500">
+                      {fetched} of {batch.items.length} downloaded &middot; {done} separated &middot; {batch.modelName}
+                    </p>
+                  </div>
+                  <div className="flex shrink-0 flex-wrap gap-2">
+                    {active ? (
+                      <Button type="button" variant="secondary" disabled={busy} onClick={() => runBatchAction(batch.id, cancelSplitBatch)}>
+                        Cancel
+                      </Button>
+                    ) : (
+                      <>
+                        {done < batch.items.length ? (
+                          <Button type="button" variant="secondary" disabled={busy} onClick={() => runBatchAction(batch.id, resumeSplitBatch)}>
+                            Resume
+                          </Button>
+                        ) : null}
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          disabled={busy}
+                          onClick={() => {
+                            if (!window.confirm("Remove this batch from the list? The splits themselves are kept.")) return;
+                            runBatchAction(batch.id, (id) => deleteSplitBatch(id, false));
+                          }}
+                        >
+                          Remove
+                        </Button>
+                      </>
+                    )}
+                  </div>
+                </div>
+
+                <ol className="mt-3 flex flex-col gap-1 border-t border-white/[0.07] pt-3">
+                  {batch.items.map((item, index) => (
+                    <li key={item.splitId} className="flex items-center gap-3 text-[12px]">
+                      <span className="w-5 shrink-0 text-right text-zinc-600">{index + 1}</span>
+                      <span className="min-w-0 flex-grow truncate text-zinc-300">{item.title}</span>
+                      <span className="shrink-0 text-zinc-500">{formatDuration(item.durationSeconds)}</span>
+                      <span
+                        className={`w-24 shrink-0 text-right font-semibold ${
+                          item.splitStatus === "Completed"
+                            ? "text-teal-200"
+                            : item.fetchStatus === "Failed" || item.splitStatus === "Failed"
+                              ? "text-rose-200"
+                              : "text-zinc-500"
+                        }`}
+                        title={item.fetchError || item.splitError || ""}
+                      >
+                        {item.fetchStatus === "Failed"
+                          ? "No audio"
+                          : item.splitStatus === "Completed"
+                            ? "Split"
+                            : item.splitStatus === "Separating"
+                              ? "Separating"
+                              : item.fetchStatus === "Fetched"
+                                ? "Ready"
+                                : item.fetchStatus}
+                      </span>
+                    </li>
+                  ))}
+                </ol>
+              </div>
+            );
+          })}
+        </section>
       ) : null}
 
       <section className="flex flex-col gap-3">

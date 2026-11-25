@@ -983,6 +983,44 @@ class CreateSplitRequest(BaseModel):
     depth: str = "standard"
 
 
+class CreateSplitBatchRequest(BaseModel):
+    url: str
+    stemSet: str = "6"
+    depth: str = "standard"
+    limit: int | None = Field(default=None, ge=1, le=100)
+
+
+class SplitBatchItem(BaseModel):
+    splitId: str
+    url: str
+    title: str
+    position: int
+    durationSeconds: float = 0.0
+    # Fetch and split are tracked separately on purpose: the batch downloads
+    # everything first, so an item can be fetched long before it is split.
+    fetchStatus: str = "Pending"
+    fetchError: str | None = None
+    splitStatus: str = "Pending"
+    splitError: str | None = None
+
+
+class SplitBatch(BaseModel):
+    id: str
+    url: str
+    title: str
+    stemSet: str
+    depth: str
+    modelName: str
+    status: str
+    progressMessage: str | None = None
+    cancelRequested: bool = False
+    createdAt: str
+    updatedAt: str
+    completedAt: str | None = None
+    error: str | None = None
+    items: list[SplitBatchItem] = Field(default_factory=list)
+
+
 class ExportSplitMixStem(BaseModel):
     stemId: str
     gainDb: float = 0.0

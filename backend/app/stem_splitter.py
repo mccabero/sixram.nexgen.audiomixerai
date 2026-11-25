@@ -13,6 +13,7 @@ same way phase6 treats yt-dlp.
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -20,6 +21,7 @@ import threading
 import time
 import uuid
 import wave
+from copy import deepcopy
 from pathlib import Path
 from typing import Any, Callable
 
@@ -34,7 +36,14 @@ from .config import (
     SPLITS_ROOT,
 )
 from .logging_utils import append_project_log, utc_now_iso
-from .models import CreateSplitRequest, ExportSplitMixRequest, Split, SplitJob
+from .models import (
+    CreateSplitBatchRequest,
+    CreateSplitRequest,
+    ExportSplitMixRequest,
+    Split,
+    SplitBatch,
+    SplitJob,
+)
 from .storage import store
 
 
@@ -985,3 +994,465 @@ def active_split_summary() -> dict[str, Any] | None:
             }
     return None
 
+
+
+# --- Batch splitting --------------------------------------------------------
+#
+# Separation is CPU-bound and runs one track at a time, so a playlist is an
+# overnight job. The batch is deliberately two-phase: every track is downloaded
+# first, then they are separated one by one.
+#
+# That split matters more than it looks. Fetching is minutes and fails in
+# network-shaped ways (throttling, a dead video); separating is hours and fails
+# in compute-shaped ways. Doing all the cheap, fragile work up front means a
+# download that gets rate-limited at track 12 costs minutes rather than
+# stranding three hours of separation, and it lets the engineer see every
+# matched title before committing the machine to a night of work.
+
+BATCH_ACTIVE_STATUSES = {"Pending", "Fetching", "Splitting"}
+BATCH_FETCH_SPACING_SECONDS = float(os.getenv("AUDIO_MIXER_BATCH_FETCH_SPACING", "4"))
+MAX_BATCH_ITEMS = int(os.getenv("AUDIO_MIXER_MAX_BATCH_ITEMS", "50"))
+
+
+def _find_batch(data: dict[str, Any], batch_id: str) -> dict[str, Any]:
+    batch = next((item for item in data.get("splitBatches", []) if item["id"] == batch_id), None)
+    if batch is None:
+        raise HTTPException(status_code=404, detail="Batch not found.")
+    return batch
+
+
+def _mutate_batch(batch_id: str, mutator: Callable[[dict[str, Any]], None]) -> dict[str, Any]:
+    with _SPLIT_LOCK:
+        data = store.load()
+        batch = _find_batch(data, batch_id)
+        mutator(batch)
+        batch["updatedAt"] = utc_now_iso()
+        store.save(data)
+        return deepcopy(batch)
+
+
+def _set_batch_status(batch_id: str, status: str, message: str | None = None) -> None:
+    def apply(batch: dict[str, Any]) -> None:
+        batch["status"] = status
+        if message is not None:
+            batch["progressMessage"] = message
+
+    _mutate_batch(batch_id, apply)
+
+
+def _batch_cancel_requested(batch_id: str) -> bool:
+    with _SPLIT_LOCK:
+        data = store.load()
+        batch = next((item for item in data.get("splitBatches", []) if item["id"] == batch_id), None)
+        return bool(batch and batch.get("cancelRequested"))
+
+
+def _update_batch_item(batch_id: str, split_id: str, changes: dict[str, Any]) -> None:
+    def apply(batch: dict[str, Any]) -> None:
+        for item in batch.get("items", []):
+            if item["splitId"] == split_id:
+                item.update(changes)
+                return
+
+    _mutate_batch(batch_id, apply)
+
+
+def enumerate_playlist(url: str, limit: int | None = None) -> tuple[list[dict[str, Any]], str]:
+    """Read a playlist's entries without downloading any audio.
+
+    extract_flat keeps this to one metadata request for the whole list rather
+    than one per video, which is the difference between a couple of seconds and
+    a couple of minutes for a long playlist.
+    """
+    try:
+        import yt_dlp  # type: ignore[import-not-found]
+    except ImportError as exc:
+        raise HTTPException(status_code=503, detail="yt-dlp is not installed. Run 'pip install yt-dlp'.") from exc
+
+    opts = {
+        "quiet": True,
+        "no_warnings": True,
+        "extract_flat": "in_playlist",
+        "skip_download": True,
+        "js_runtimes": {"node": {}},
+        "extractor_args": {
+            "youtube": {"player_client": ["tv", "ios", "web_safari", "android", "web"]},
+        },
+    }
+    if limit:
+        opts["playlistend"] = int(limit)
+
+    with yt_dlp.YoutubeDL(opts) as ydl:
+        info = ydl.extract_info(url, download=False)
+
+    if not isinstance(info, dict):
+        raise HTTPException(status_code=400, detail="Could not read that playlist.")
+
+    entries = [entry for entry in (info.get("entries") or []) if isinstance(entry, dict)]
+    if not entries:
+        raise HTTPException(
+            status_code=400,
+            detail="That URL has no playlist entries. Use a playlist link, or add a single track the usual way.",
+        )
+
+    tracks: list[dict[str, Any]] = []
+    for position, entry in enumerate(entries[:MAX_BATCH_ITEMS]):
+        video_id = entry.get("id")
+        entry_url = entry.get("url") or entry.get("webpage_url")
+        if entry_url and not _URL_PATTERN.match(entry_url):
+            # extract_flat gives bare ids for YouTube rather than full URLs.
+            entry_url = f"https://www.youtube.com/watch?v={entry_url}"
+        if not entry_url and video_id:
+            entry_url = f"https://www.youtube.com/watch?v={video_id}"
+        if not entry_url:
+            continue
+        tracks.append(
+            {
+                "url": entry_url,
+                "title": entry.get("title") or "Untitled",
+                "durationSeconds": float(entry.get("duration") or 0),
+                "position": position,
+            }
+        )
+
+    if not tracks:
+        raise HTTPException(status_code=400, detail="No playable entries were found in that playlist.")
+    return tracks, info.get("title") or "Playlist"
+
+
+def create_split_batch(payload: CreateSplitBatchRequest) -> SplitBatch:
+    _require_separation_environment()
+
+    url = (payload.url or "").strip()
+    if not _URL_PATTERN.match(url):
+        raise HTTPException(status_code=400, detail="The URL must start with http:// or https://.")
+
+    stem_set = payload.stemSet if payload.stemSet in SPLIT_MODELS else "6"
+    depth = payload.depth if payload.depth in ("standard", "deep") else "standard"
+    if stem_set != "6":
+        depth = "standard"
+    model_name = (
+        SPLIT_MODELS[stem_set]
+        if depth == "standard"
+        else f"{SPLIT_MODELS['4']} -> {SPLIT_MODELS[stem_set]}"
+    )
+
+    tracks, playlist_title = enumerate_playlist(url, payload.limit)
+
+    now = utc_now_iso()
+    batch_id = uuid.uuid4().hex
+    items: list[dict[str, Any]] = []
+
+    with _SPLIT_LOCK:
+        data = store.load()
+        data.setdefault("splits", [])
+        data.setdefault("splitBatches", [])
+
+        running = next(
+            (item for item in data["splitBatches"] if item.get("status") in BATCH_ACTIVE_STATUSES),
+            None,
+        )
+        if running:
+            raise HTTPException(status_code=409, detail="A batch is already running. Let it finish or cancel it first.")
+
+        for track in tracks:
+            split_id = uuid.uuid4().hex
+            # "Queued" deliberately sits outside ACTIVE_SPLIT_STATUSES: these
+            # splits exist from the moment the batch is created, and must not
+            # trip the one-at-a-time guard that create_split enforces.
+            data["splits"].append(
+                {
+                    "id": split_id,
+                    "url": track["url"],
+                    "videoId": _extract_video_id(track["url"]),
+                    "title": track["title"],
+                    "uploader": None,
+                    "durationSeconds": track["durationSeconds"],
+                    "stemSet": stem_set,
+                    "depth": depth,
+                    "modelName": model_name,
+                    "status": "Queued",
+                    "batchId": batch_id,
+                    "createdAt": now,
+                    "updatedAt": now,
+                    "completedAt": None,
+                    "error": None,
+                    "stems": [],
+                    "job": {
+                        "id": uuid.uuid4().hex,
+                        "splitId": split_id,
+                        "status": "Queued",
+                        "progress": 0,
+                        "message": "Waiting for the batch.",
+                        "cancelRequested": False,
+                        "createdAt": now,
+                        "updatedAt": now,
+                    },
+                }
+            )
+            items.append(
+                {
+                    "splitId": split_id,
+                    "url": track["url"],
+                    "title": track["title"],
+                    "position": track["position"],
+                    "durationSeconds": track["durationSeconds"],
+                    "fetchStatus": "Pending",
+                    "fetchError": None,
+                    "splitStatus": "Pending",
+                    "splitError": None,
+                }
+            )
+
+        batch = {
+            "id": batch_id,
+            "url": url,
+            "title": playlist_title,
+            "stemSet": stem_set,
+            "depth": depth,
+            "modelName": model_name,
+            "status": "Pending",
+            "progressMessage": f"{len(items)} tracks queued.",
+            "cancelRequested": False,
+            "createdAt": now,
+            "updatedAt": now,
+            "completedAt": None,
+            "error": None,
+            "items": items,
+        }
+        data["splitBatches"].append(batch)
+        store.save(data)
+
+    for item in items:
+        ensure_split_dirs(item["splitId"])
+
+    return SplitBatch(**batch)
+
+
+def _fetch_batch_item(batch_id: str, item: dict[str, Any], ffmpeg_path: str) -> None:
+    """Download one track's audio and convert it, leaving it ready to split."""
+    split_id = item["splitId"]
+    dirs = ensure_split_dirs(split_id)
+    wav_path = dirs["source"] / "input.wav"
+
+    with _SPLIT_LOCK:
+        data = store.load()
+        split = _find_split(data, split_id)
+        already = wav_path.exists() and float(split.get("durationSeconds") or 0) > 0
+
+    if already:
+        _update_batch_item(batch_id, split_id, {"fetchStatus": "Fetched", "fetchError": None})
+        _log(split_id, "Audio already on disk; fetch skipped.")
+        return
+
+    _update_batch_item(batch_id, split_id, {"fetchStatus": "Fetching", "fetchError": None})
+    _set_progress(split_id, "Queued", 2, "Downloading audio for the batch...")
+
+    info = _download_audio(split_id, item["url"], dirs["source"])
+
+    def apply_info(split: dict[str, Any]) -> None:
+        split["title"] = info["title"]
+        split["uploader"] = info.get("uploader")
+        split["durationSeconds"] = float(info.get("duration") or 0)
+        if info.get("videoId"):
+            split["videoId"] = info["videoId"]
+        split["status"] = "Queued"
+
+    _mutate_split(split_id, apply_info)
+    _convert_to_wav(ffmpeg_path, info["path"], wav_path)
+
+    _update_batch_item(
+        batch_id,
+        split_id,
+        {
+            "fetchStatus": "Fetched",
+            "fetchError": None,
+            "title": info["title"],
+            "durationSeconds": float(info.get("duration") or 0),
+        },
+    )
+    _log(split_id, f"Fetched '{info['title']}' for batch {batch_id}.")
+
+
+def run_split_batch(batch_id: str) -> None:
+    """Background worker. Never raises: failures are recorded on the batch.
+
+    Safe to call again on a batch that was interrupted - fetching skips audio
+    already on disk, and run_split reuses it, so a resume costs nothing for the
+    work already done.
+    """
+    try:
+        ffmpeg_path = _ffmpeg()
+    except Exception as exc:  # pragma: no cover - environment failure
+        _set_batch_status(batch_id, "Failed", str(exc) or "ffmpeg is unavailable.")
+        return
+
+    try:
+        # --- phase 1: fetch everything ------------------------------------
+        _set_batch_status(batch_id, "Fetching", "Downloading audio for every track...")
+        with _SPLIT_LOCK:
+            data = store.load()
+            items = deepcopy(_find_batch(data, batch_id)["items"])
+
+        fetched_any = False
+        for index, item in enumerate(items):
+            if _batch_cancel_requested(batch_id):
+                _set_batch_status(batch_id, "Cancelled", "Cancelled while downloading.")
+                return
+            if item.get("fetchStatus") == "Fetched":
+                continue
+            _set_batch_status(
+                batch_id,
+                "Fetching",
+                f"Downloading {index + 1} of {len(items)}: {item['title']}",
+            )
+            try:
+                if fetched_any and BATCH_FETCH_SPACING_SECONDS > 0:
+                    # A tight loop of downloads reads as scraping and gets
+                    # throttled; the pause is free against an overnight split.
+                    time.sleep(BATCH_FETCH_SPACING_SECONDS)
+                _fetch_batch_item(batch_id, item, ffmpeg_path)
+                fetched_any = True
+            except HTTPException as exc:
+                _update_batch_item(batch_id, item["splitId"], {"fetchStatus": "Failed", "fetchError": str(exc.detail)})
+                _log(item["splitId"], f"Batch fetch failed: {exc.detail}")
+            except Exception as exc:  # noqa: BLE001 - one bad track must not stop the batch
+                _update_batch_item(batch_id, item["splitId"], {"fetchStatus": "Failed", "fetchError": str(exc) or "Download failed."})
+                _log(item["splitId"], f"Batch fetch failed: {exc}")
+
+        # --- phase 2: separate, one at a time ------------------------------
+        with _SPLIT_LOCK:
+            data = store.load()
+            items = deepcopy(_find_batch(data, batch_id)["items"])
+
+        ready = [item for item in items if item.get("fetchStatus") == "Fetched"]
+        if not ready:
+            _set_batch_status(batch_id, "Failed", "No track could be downloaded.")
+            _mutate_batch(batch_id, lambda batch: batch.update({"error": "No track could be downloaded."}))
+            return
+
+        for index, item in enumerate(ready):
+            if _batch_cancel_requested(batch_id):
+                _set_batch_status(batch_id, "Cancelled", "Cancelled between tracks.")
+                return
+
+            split_id = item["splitId"]
+            with _SPLIT_LOCK:
+                data = store.load()
+                status = _find_split(data, split_id).get("status")
+            if status == "Completed":
+                _update_batch_item(batch_id, split_id, {"splitStatus": "Completed"})
+                continue
+
+            _set_batch_status(
+                batch_id,
+                "Splitting",
+                f"Separating {index + 1} of {len(ready)}: {item['title']}",
+            )
+            _update_batch_item(batch_id, split_id, {"splitStatus": "Separating"})
+            _mutate_split(split_id, lambda split: split.update({"status": "Pending"}))
+
+            run_split(split_id)
+
+            with _SPLIT_LOCK:
+                data = store.load()
+                split = _find_split(data, split_id)
+                final_status = split.get("status")
+                final_error = split.get("error")
+            _update_batch_item(batch_id, split_id, {"splitStatus": final_status, "splitError": final_error})
+
+        # --- outcome -------------------------------------------------------
+        with _SPLIT_LOCK:
+            data = store.load()
+            items = deepcopy(_find_batch(data, batch_id)["items"])
+        done = sum(1 for item in items if item.get("splitStatus") == "Completed")
+        failed = len(items) - done
+
+        def finish(batch: dict[str, Any]) -> None:
+            batch["status"] = "Completed" if failed == 0 else "Partial"
+            batch["completedAt"] = utc_now_iso()
+            batch["cancelRequested"] = False
+            batch["progressMessage"] = (
+                f"{done} of {len(items)} tracks split." if failed else f"All {done} tracks split."
+            )
+
+        _mutate_batch(batch_id, finish)
+
+    except Exception as exc:  # noqa: BLE001 - the worker must never raise
+        def fail(batch: dict[str, Any]) -> None:
+            batch["status"] = "Failed"
+            batch["error"] = str(exc) or "The batch failed."
+            batch["cancelRequested"] = False
+
+        _mutate_batch(batch_id, fail)
+
+
+def list_split_batches() -> list[SplitBatch]:
+    data = store.load()
+    batches = sorted(data.get("splitBatches", []), key=lambda item: item.get("createdAt", ""), reverse=True)
+    return [SplitBatch(**batch) for batch in batches]
+
+
+def get_split_batch(batch_id: str) -> SplitBatch:
+    data = store.load()
+    return SplitBatch(**_find_batch(data, batch_id))
+
+
+def request_batch_cancel(batch_id: str) -> SplitBatch:
+    """Ask the batch to stop. It lands between tracks, never mid-separation."""
+    def apply(batch: dict[str, Any]) -> None:
+        if batch.get("status") not in BATCH_ACTIVE_STATUSES:
+            raise HTTPException(status_code=409, detail="That batch is not running.")
+        batch["cancelRequested"] = True
+        batch["progressMessage"] = "Cancelling after the current track..."
+
+    batch = _mutate_batch(batch_id, apply)
+    # The split in flight is cancelled too, so a long separation stops promptly.
+    for item in batch.get("items", []):
+        if item.get("splitStatus") == "Separating":
+            try:
+                request_split_cancel(item["splitId"])
+            except HTTPException:
+                pass
+    return SplitBatch(**batch)
+
+
+def delete_split_batch(batch_id: str, delete_splits: bool = False) -> dict[str, str]:
+    with _SPLIT_LOCK:
+        data = store.load()
+        batch = _find_batch(data, batch_id)
+        if batch.get("status") in BATCH_ACTIVE_STATUSES:
+            raise HTTPException(status_code=409, detail="Cancel the batch before deleting it.")
+        split_ids = [item["splitId"] for item in batch.get("items", [])]
+        data["splitBatches"] = [item for item in data.get("splitBatches", []) if item["id"] != batch_id]
+        store.save(data)
+
+    if delete_splits:
+        for split_id in split_ids:
+            try:
+                delete_split(split_id)
+            except HTTPException:
+                continue
+    return {"message": "Batch deleted."}
+
+
+def mark_interrupted_batches() -> None:
+    """Called at startup, alongside mark_interrupted_splits.
+
+    A batch cannot resume itself across a restart, so it is parked rather than
+    left claiming to be running. Everything it already fetched or split stays on
+    disk, so resuming is cheap.
+    """
+    with _SPLIT_LOCK:
+        data = store.load()
+        changed = False
+        for batch in data.get("splitBatches", []):
+            if batch.get("status") not in BATCH_ACTIVE_STATUSES:
+                continue
+            batch["status"] = "Interrupted"
+            batch["cancelRequested"] = False
+            batch["progressMessage"] = "Interrupted by a backend restart. Resume to carry on."
+            batch["updatedAt"] = utc_now_iso()
+            changed = True
+        if changed:
+            store.save(data)
