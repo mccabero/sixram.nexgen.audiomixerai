@@ -20,6 +20,12 @@
 import { EQ_BAND_COUNT, isBandActive, normalizeEqBands } from "./eq.js";
 import { buildStemChain, createDelayBus, createReverbImpulse, disconnectAll } from "./mixChain.js";
 
+// Decoded PCM buffers keyed by URL. AudioBuffer is a plain data container —
+// the spec allows it to be shared across AudioContext instances. Caching here
+// means navigating back to the same song skips both the network fetch and the
+// CPU-intensive decode step, so playback is available immediately.
+const _bufferCache = new Map();
+
 const SCHEDULE_LEAD_SECONDS = 0.06;
 const RAMP_SECONDS = 0.02;
 
@@ -87,10 +93,14 @@ export default class StemPlayer {
 
     const entries = await Promise.all(
       stems.map(async (stem) => {
-        const response = await fetch(stem.url);
-        if (!response.ok) throw new Error(`Could not load ${stem.id} (${response.status}).`);
-        const encoded = await response.arrayBuffer();
-        const buffer = await context.decodeAudioData(encoded);
+        let buffer = _bufferCache.get(stem.url);
+        if (!buffer) {
+          const response = await fetch(stem.url);
+          if (!response.ok) throw new Error(`Could not load ${stem.id} (${response.status}).`);
+          const encoded = await response.arrayBuffer();
+          buffer = await context.decodeAudioData(encoded);
+          _bufferCache.set(stem.url, buffer);
+        }
         loaded += 1;
         if (onProgress) onProgress(loaded, stems.length);
         return { stem, buffer };

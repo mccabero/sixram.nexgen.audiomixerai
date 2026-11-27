@@ -341,6 +341,7 @@ def _decorate(payload: dict[str, Any]) -> dict[str, Any]:
             [dict(line) for line in stored["lines"]],
             chords,
             float(payload.get("durationSeconds") or 0),
+            sections=stored.get("sections") or [],
         )
     else:
         payload["lyricRows"] = []

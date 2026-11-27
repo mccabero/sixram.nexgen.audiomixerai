@@ -50,6 +50,118 @@ _SPLITTERS = (" - ", " – ", " — ", " ~ ", " | ")
 _LRC_STAMP = re.compile(r"\[(\d{1,3}):(\d{2})(?:[.:](\d{1,3}))?\]")
 # [ar: ...] and friends, which are metadata rather than a lyric line.
 _LRC_META = re.compile(r"^\[[a-z]{2,}:.*\]$", re.IGNORECASE)
+# [Verse 1] / [Chorus] / [Bridge] style section headings in pasted lyrics.
+_SECTION_MARKER_RE = re.compile(r"^\s*\[([A-Z][^\[\]\n]{1,40})\]\s*$", re.MULTILINE)
+# Same pattern used inside the Genius page scraper.
+_GENIUS_SECTION_RE = re.compile(
+    r"^\s*\[([A-Z][^\[\]\n]{1,40})\]\s*$"
+    r"(?:\n[ \t]*)*"               # skip blank / whitespace-only lines
+    r"([A-Za-z\"\'\(][^\[\]\n]{0,120})?",  # first lyric line (optional)
+    re.MULTILINE,
+)
+
+
+def _genius_sections(track: str, artist: str | None, timeout: int = 8) -> list[dict] | None:
+    """
+    Fetch song-section structure from Genius (best-effort, never raises).
+
+    Returns [{"label": "Verse 1", "firstLine": "..."}, ...] in song order,
+    with firstLine="" for instrumental sections that carry no sung words.
+    Returns None on any network error or when the song cannot be found.
+    """
+    query = f"{artist} {track}".strip() if artist else track
+    encoded = urllib.parse.quote(query)
+    # Genius's multi-search endpoint works without an OAuth token.
+    search_url = f"https://genius.com/api/search/multi?per_page=3&q={encoded}"
+    try:
+        req = urllib.request.Request(
+            search_url,
+            headers={"User-Agent": USER_AGENT, "Accept": "application/json"},
+        )
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        song_url: str | None = None
+        for section in data.get("response", {}).get("sections", []):
+            if section.get("type") == "song":
+                hits = section.get("hits", [])
+                if hits:
+                    song_url = hits[0]["result"]["url"]
+                    break
+        # Basic SSRF guard.
+        if not song_url or not song_url.startswith("https://genius.com/"):
+            return None
+    except Exception:
+        return None
+
+    try:
+        page_req = urllib.request.Request(
+            song_url,
+            headers={
+                "User-Agent": (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/120.0.0.0 Safari/537.36"
+                ),
+                "Accept": "text/html,application/xhtml+xml",
+                "Accept-Language": "en-US,en;q=0.9",
+            },
+        )
+        with urllib.request.urlopen(page_req, timeout=timeout + 2) as resp:
+            html = resp.read().decode("utf-8", errors="replace")
+    except Exception:
+        return None
+
+    # Strip <script> and <style> blocks first so their content (which may
+    # contain '[...]' patterns) doesn't pollute the section detection.
+    html = re.sub(r"<script[^>]*>.*?</script>", "", html, flags=re.DOTALL | re.IGNORECASE)
+    html = re.sub(r"<style[^>]*>.*?</style>", "", html, flags=re.DOTALL | re.IGNORECASE)
+    text = re.sub(r"<[^>]+>", "\n", html)
+    for entity, char in [
+        ("&amp;", "&"), ("&lt;", "<"), ("&gt;", ">"),
+        ("&#x27;", "'"), ("&quot;", '"'), ("&#39;", "'"), ("&nbsp;", " "),
+    ]:
+        text = text.replace(entity, char)
+
+    sections: list[dict] = []
+    for match in _GENIUS_SECTION_RE.finditer(text):
+        label = match.group(1).strip()
+        first_line = (match.group(2) or "").strip()
+        sections.append({"label": label, "firstLine": first_line})
+
+    return sections or None
+
+
+def _extract_pasted_sections(text: str) -> list[dict]:
+    """
+    Pull [Section] markers out of pasted lyrics text (Genius-style format).
+
+    Returns sections in order: [{"label": "Verse 1", "firstLine": "..."}, ...].
+    The firstLine is the first actual lyric line after the marker (empty string
+    when the section is purely instrumental and no lyric follows).
+    """
+    sections: list[dict] = []
+    lines = text.splitlines()
+    for i, line in enumerate(lines):
+        m = re.fullmatch(r"\s*\[([A-Z][^\[\]]{1,40})\]\s*", line)
+        if not m:
+            continue
+        label = m.group(1).strip()
+        first_line = ""
+        for j in range(i + 1, min(i + 6, len(lines))):
+            candidate = _LRC_STAMP.sub("", lines[j]).strip()
+            if candidate and not re.fullmatch(r"\[[^\[\]]+\]", candidate):
+                first_line = candidate
+                break
+        sections.append({"label": label, "firstLine": first_line})
+    return sections
+
+
+def _add_genius_sections(result: dict, track: str, artist: str | None) -> dict:
+    """Augment a lyrics dict with Genius song-structure (best-effort)."""
+    track_name = (result.get("trackName") or track or "").strip()
+    artist_name = (result.get("artistName") or artist or "").strip() or None
+    result["sections"] = _genius_sections(track_name, artist_name) or [] if track_name else []
+    return result
 
 
 def clean_title(raw: str) -> tuple[str | None, str]:
@@ -168,7 +280,7 @@ def fetch_from_lrclib(track: str, artist: str | None, duration: float | None, al
         except Exception:
             record = None
         if record:
-            return _shape(record, "lrclib-exact")
+            return _add_genius_sections(_shape(record, "lrclib-exact"), track, artist)
 
     query = f"{artist} {track}".strip() if artist else track
     try:
@@ -188,7 +300,7 @@ def fetch_from_lrclib(track: str, artist: str | None, duration: float | None, al
             scored.append((not synced, gap, record))
         if scored:
             scored.sort(key=lambda row: (row[0], row[1]))
-            return _shape(scored[0][2], "lrclib-search")
+            return _add_genius_sections(_shape(scored[0][2], "lrclib-search"), track, artist)
 
     return None
 
@@ -205,12 +317,22 @@ def _shape(record: dict, source: str) -> dict:
         "albumName": record.get("albumName"),
         "duration": record.get("duration"),
         "lines": lines,
+        "sections": [],  # populated by _add_genius_sections() after this call
     }
 
 
 def from_pasted(text: str) -> dict:
-    """Lyrics the user typed or pasted. LRC timestamps are honoured if present."""
+    """Lyrics the user typed or pasted. LRC timestamps are honoured if present.
+
+    If the text includes Genius-style section markers ([Verse 1], [Chorus], …)
+    they are extracted as section structure and stripped from the lyric lines
+    so they don't appear as sung words.
+    """
     body = text or ""
+    sections = _extract_pasted_sections(body)
+    if sections:
+        # Remove the marker lines before parsing so they don't become lyric rows.
+        body = _SECTION_MARKER_RE.sub("", body)
     synced = bool(_LRC_STAMP.search(body))
     return {
         "source": "manual",
@@ -220,6 +342,7 @@ def from_pasted(text: str) -> dict:
         "albumName": None,
         "duration": None,
         "lines": parse_lrc(body) if synced else parse_plain(body),
+        "sections": sections,
     }
 
 
@@ -228,7 +351,101 @@ def from_pasted(text: str) -> dict:
 # ---------------------------------------------------------------------------
 
 
-def place_chords(lines: list[dict], chords: list[dict], duration: float) -> list[dict]:
+def _annotate_rows_with_sections(rows: list[dict], sections: list[dict]) -> list[dict]:
+    """
+    Assign a section label to every lyric row using song structure from Genius.
+
+    Vocal sections (those with a firstLine) are matched to rows by forward-only
+    text similarity.  Instrumental sections (firstLine="") are placed between
+    matched vocal sections based on their position in the Genius ordered list.
+    Every subsequent row inherits the current section until a new one starts.
+    """
+    if not sections or not rows:
+        return rows
+
+    vocal_rows = [r for r in rows if not r.get("instrumental")]
+
+    # Phase 1 — match sections that carry a first lyric line.
+    # bindings: (genius_idx, row_idx_or_-1, label)
+    bindings: list[tuple[int, int, str]] = []
+    min_row_idx = 0
+
+    for g_idx, section in enumerate(sections):
+        label = section.get("label", "")
+        first_line = (section.get("firstLine") or "").strip()
+
+        if not first_line or len(re.findall(r"[a-z]+", first_line.lower())) < 2:
+            bindings.append((g_idx, -1, label))
+            continue
+
+        words = set(re.findall(r"[a-z]+", first_line.lower()))
+        best_idx, best_score = -1, 0.0
+        for row in vocal_rows:
+            if row["index"] < min_row_idx:
+                continue
+            line_words = set(re.findall(r"[a-z]+", (row.get("text") or "").lower()))
+            if not line_words:
+                continue
+            score = len(words & line_words) / len(words | line_words)
+            if score > best_score and score >= 0.4:
+                best_score, best_idx = score, row["index"]
+
+        bindings.append((g_idx, best_idx, label))
+        if best_idx >= 0:
+            min_row_idx = best_idx + 1
+
+    if not any(ridx >= 0 for _, ridx, _ in bindings):
+        return rows  # nothing matched — leave rows without section field
+
+    # Phase 2 — build a timeline: (row_idx, label) for every section.
+    timeline: list[tuple[int, str]] = [
+        (ridx, lbl) for _, ridx, lbl in bindings if ridx >= 0
+    ]
+
+    for b_idx, (_, ridx, label) in enumerate(bindings):
+        if ridx >= 0:
+            continue  # already in timeline
+
+        prev = next((r for _, r, _ in reversed(bindings[:b_idx]) if r >= 0), None)
+        nxt = next((r for _, r, _ in bindings[b_idx + 1:] if r >= 0), None)
+
+        if prev is None:
+            # Comes before all matched sections — Intro / pre-song material.
+            timeline.append((0, label))
+        elif nxt is None:
+            # Comes after all matched sections — Outro / tail.
+            timeline.append((rows[-1]["index"] + 1, label))
+        else:
+            # In between: start at the first instrumental row in that gap,
+            # or at the midpoint as a fallback.
+            start = next(
+                (r["index"] for r in rows if prev < r["index"] < nxt and r.get("instrumental")),
+                (prev + nxt) // 2,
+            )
+            if start < nxt:
+                timeline.append((start, label))
+
+    timeline.sort(key=lambda t: t[0])
+
+    # Deduplicate: keep the first entry for each row index.
+    seen: set[int] = set()
+    timeline = [(r, l) for r, l in timeline if not (r in seen or seen.add(r))]  # type: ignore[func-returns-value]
+
+    # Phase 3 — walk rows, applying the current section label.
+    result: list[dict] = []
+    tl_idx = 0
+    current_section: str | None = None
+
+    for row in rows:
+        while tl_idx < len(timeline) and row["index"] >= timeline[tl_idx][0]:
+            current_section = timeline[tl_idx][1]
+            tl_idx += 1
+        result.append({**row, "section": current_section})
+
+    return result
+
+
+def place_chords(lines: list[dict], chords: list[dict], duration: float, sections: list[dict] | None = None) -> list[dict]:
     """Put each chord above the word it lands on.
 
     With line-level timing the position within a line is proportional: a chord a
@@ -307,6 +524,10 @@ def place_chords(lines: list[dict], chords: list[dict], duration: float) -> list
         cursor = end
 
     _append_instrumental(rows, [c for c in playing if c["startSeconds"] >= cursor], cursor, duration)
+
+    if sections:
+        rows = _annotate_rows_with_sections(rows, sections)
+
     return rows
 
 

@@ -6,9 +6,9 @@ and the orchestration in chord_sheet.py can be reasoned about separately.
 
 The engine takes the stems the Phase 8 splitter already produced:
 
-  harmony   bass + other + guitar + piano   chroma, and the chords themselves
+  harmony   other + guitar + piano          CENS chroma for chord templates
   drums     the kit on its own              the beat grid
-  bass      the low end on its own          a root cue the chroma cannot give
+  bass      the low end on its own          root cue added separately at bass_weight
 
 What it deliberately does NOT do is claim an instrument tuning. Chord
 recognition returns sounding pitches, which are correct whatever the guitar is
@@ -96,7 +96,9 @@ def load_stems(stems_dir, max_seconds: float | None = None) -> dict:
     import librosa
 
     found: dict[str, np.ndarray] = {}
-    for name in list(CHORD_HARMONY_STEMS) + ["drums"]:
+    # Bass is loaded unconditionally so decode_chords() always has a root cue,
+    # even though it is no longer part of the harmony mix.
+    for name in list(CHORD_HARMONY_STEMS) + ["drums", "bass"]:
         path = stems_dir / f"{name}.wav"
         if not path.exists():
             continue
@@ -395,8 +397,8 @@ def decode_chords(
     bass: np.ndarray,
     drums: np.ndarray,
     semitone_offset: float,
-    bass_weight: float = 0.35,
-    stay: float = 0.72,
+    bass_weight: float = 0.45,
+    stay: float = 0.80,
     temperature: float = 0.06,
     progress=None,
 ) -> dict:
@@ -411,9 +413,21 @@ def decode_chords(
     harmonic_part, _ = librosa.effects.hpss(harmony)
 
     _tick(progress, 0.45, "Building chroma...")
-    chroma = librosa.feature.chroma_cqt(
-        y=harmonic_part, sr=ANALYSIS_SR, hop_length=ANALYSIS_HOP, tuning=semitone_offset, bins_per_octave=36, n_chroma=12
+    # CENS (Chroma Energy Normalized and Smoothed) is more robust to bleed and
+    # loudness variation than raw CQT chroma: it log-compresses each bin, then
+    # applies a smoothing window, then re-normalises. The result is a stable
+    # pitch-class profile where the third and fifth of a chord are not drowned
+    # out by transients or by a loud root on a neighbouring stem.
+    chroma = librosa.feature.chroma_cens(
+        y=harmonic_part,
+        sr=ANALYSIS_SR,
+        hop_length=ANALYSIS_HOP,
+        tuning=semitone_offset,
+        n_chroma=12,
+        win_len_smooth=21,
     )
+    # Keep bass as raw CQT: it plays single notes and benefits from amplitude
+    # resolution rather than from the smoothing CENS applies.
     bass_chroma = librosa.feature.chroma_cqt(
         y=bass, sr=ANALYSIS_SR, hop_length=ANALYSIS_HOP, tuning=semitone_offset, bins_per_octave=36, n_chroma=12
     )
@@ -434,7 +448,7 @@ def decode_chords(
     scores = templates @ normalised
     for chord in range(24):
         scores[chord] += bass_weight * bass_normalised[chord % 12]
-    scores[N_CHORD] = 0.55 + np.clip(0.4 - energy, 0, None)
+    scores[N_CHORD] = 0.42 + np.clip(0.4 - energy, 0, None)
 
     probability = np.exp((scores - scores.max(axis=0)) / temperature)
     probability /= probability.sum(axis=0, keepdims=True)

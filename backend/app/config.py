@@ -74,8 +74,11 @@ BEATS_PER_BAR = 4
 # flags land on genuinely ambiguous spots rather than on a third of the song.
 LOW_CONFIDENCE = float(os.getenv("AUDIO_MIXER_CHORD_LOW_CONFIDENCE", "0.62"))
 
-# Stems that carry harmony; a 4-stem split just contributes bass + other.
-CHORD_HARMONY_STEMS = ("bass", "other", "guitar", "piano")
+# Stems that carry harmony. Bass is intentionally excluded: it typically plays
+# only the root note, which overweights the root pitch class and makes it hard
+# to distinguish major from minor. The root is supplied separately through
+# bass_chroma with a controlled bass_weight in decode_chords().
+CHORD_HARMONY_STEMS = ("other", "guitar", "piano")
 
 # Shapes a beginner can play open. Used only to rank tuning and capo options.
 OPEN_SHAPES = {"E", "A", "D", "G", "C", "Em", "Am", "Dm"}

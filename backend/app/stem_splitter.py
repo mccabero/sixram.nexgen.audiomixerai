@@ -780,6 +780,28 @@ def run_split(split_id: str) -> None:
         _mutate_split(split_id, finish)
         _log(split_id, f"Split completed in {elapsed:.0f}s with {len(written)} stems.")
 
+        # -- auto chord sheet ------------------------------------------------
+        # Runs sequentially in this same background thread while the split is
+        # already marked Ready, so the UI sees the split as done immediately.
+        # Failures are logged and swallowed — the split itself is not affected.
+        try:
+            from . import chord_sheet as _cs
+            from .models import CreateChordSheetRequest
+
+            with _cs._SHEET_LOCK:
+                _snapshot = store.load()
+                _already = any(
+                    s.get("splitId") == split_id
+                    for s in _snapshot.get("chordSheets", [])
+                )
+
+            if not _already:
+                _sheet = _cs.create_chord_sheet(CreateChordSheetRequest(splitId=split_id))
+                if _sheet.status == "Pending":
+                    _cs.run_chord_sheet(_sheet.id)
+        except Exception as _exc:  # noqa: BLE001
+            _log(split_id, f"Auto chord-sheet skipped: {_exc}")
+
     except SplitCancelled:
         _log(split_id, "Split cancelled by user.")
 

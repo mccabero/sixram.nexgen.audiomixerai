@@ -73,31 +73,83 @@ function ChordLine({ chords }) {
     parts.push(<Chord key={`chord-${index}`} chord={chord} />);
     column += chord.label.length;
   });
-  return <div className="whitespace-pre font-mono text-[15px] font-semibold leading-snug">{parts}</div>;
+  return <div className="whitespace-pre font-mono font-semibold leading-snug" style={{ fontSize: "var(--chord-sheet-fs, 16px)" }}>{parts}</div>;
 }
 
-function LyricRow({ row }) {
-  if (row.instrumental) {
-    return (
-      <div className="flex items-baseline gap-3 py-1">
-        <span className="w-10 shrink-0 text-right font-mono text-[11px] tabular-nums text-zinc-600">
-          {formatTime(row.startSeconds)}
-        </span>
-        <div className="rounded-md border border-white/[0.07] bg-white/[0.02] px-3 py-1">
-          <ChordLine chords={row.chords} />
-        </div>
-      </div>
-    );
+// Groups lyric rows into labelled sections for Ultimate Guitar-style display.
+//
+// When the backend has fetched song structure from Genius, every row carries a
+// `section` field and we just group by that label (most accurate).  Otherwise
+// we fall back to the local heuristic: instrumental blocks get Intro/Interlude/
+// Outro; vocal blocks are Verse N, with the most-repeated opening line calling
+// itself Chorus.
+function buildSections(rows) {
+  if (!rows.length) return [];
+
+  // ── Server-provided sections (from Genius) ──────────────────────────────
+  if (rows.some((r) => r.section != null)) {
+    const groups = [];
+    for (const row of rows) {
+      // A row inherits the previous label when its own section field is null
+      // (rows that fall before the first matched section boundary).
+      const label = row.section ?? (groups.length ? groups.at(-1).label : null);
+      if (!groups.length || label !== groups.at(-1).label) {
+        groups.push({ label: label ?? "Intro", rows: [row] });
+      } else {
+        groups.at(-1).rows.push(row);
+      }
+    }
+    return groups;
   }
+
+  // ── Local heuristic fallback ─────────────────────────────────────────────
+  const groups = [];
+  for (const row of rows) {
+    const type = row.instrumental ? "instrumental" : "vocal";
+    if (!groups.length || groups.at(-1).type !== type) {
+      groups.push({ type, rows: [row] });
+    } else {
+      groups.at(-1).rows.push(row);
+    }
+  }
+  const sigCount = new Map();
+  groups.forEach((g) => {
+    if (g.type !== "vocal") return;
+    const sig = (g.rows[0]?.text ?? "").trim().toLowerCase().slice(0, 40);
+    sigCount.set(sig, (sigCount.get(sig) ?? 0) + 1);
+  });
+  const chorusSig = [...sigCount.entries()]
+    .filter(([, n]) => n > 1)
+    .sort(([, a], [, b]) => b - a)[0]?.[0];
+  let verseN = 0;
+  const labelMap = new Map();
+  return groups.map((g, i) => {
+    if (g.type === "instrumental") {
+      const label = i === 0 ? "Intro" : i === groups.length - 1 ? "Outro" : "Interlude";
+      return { ...g, label };
+    }
+    const sig = (g.rows[0]?.text ?? "").trim().toLowerCase().slice(0, 40);
+    if (!labelMap.has(sig)) {
+      labelMap.set(sig, sig === chorusSig ? "Chorus" : `Verse ${(verseN += 1)}`);
+    }
+    return { ...g, label: labelMap.get(sig) };
+  });
+}
+
+function VocalRow({ row }) {
   return (
-    <div className="flex items-start gap-3 py-1.5">
-      <span className="mt-5 w-10 shrink-0 text-right font-mono text-[11px] tabular-nums text-zinc-600">
-        {formatTime(row.startSeconds)}
-      </span>
-      <div className="min-w-0">
-        <ChordLine chords={row.chords} />
-        <div className="whitespace-pre font-mono text-[15px] leading-snug text-zinc-200">{row.text}</div>
-      </div>
+    <div className="mb-3">
+      <ChordLine chords={row.chords} />
+      <div className="whitespace-pre font-mono leading-snug text-zinc-200" style={{ fontSize: "var(--chord-sheet-fs, 16px)" }}>{row.text}</div>
+    </div>
+  );
+}
+
+function InstrumentalRow({ row }) {
+  if (!row.chords.length) return null;
+  return (
+    <div className="mb-1">
+      <ChordLine chords={row.chords} />
     </div>
   );
 }
@@ -116,6 +168,7 @@ export default function ChordSheetPage() {
   const [notice, setNotice] = useState("");
   const [pasting, setPasting] = useState(false);
   const [pasteText, setPasteText] = useState("");
+  const [fontSize, setFontSize] = useState(16);
   const [lyricBusy, setLyricBusy] = useState(false);
   const timerRef = useRef(null);
   const autoFetchedRef = useRef(false);
@@ -464,6 +517,22 @@ export default function ChordSheetPage() {
                 <Trash2 size={14} />
                 Remove lyrics
               </button>
+              <div className="ml-auto flex items-center gap-0.5 rounded-lg border border-white/10 bg-white/[0.03] p-0.5">
+                {[{ label: "S", size: 13 }, { label: "M", size: 16 }, { label: "L", size: 20 }].map(({ label, size }) => (
+                  <button
+                    key={size}
+                    type="button"
+                    onClick={() => setFontSize(size)}
+                    className={`min-h-7 w-8 rounded px-1 text-[11px] font-bold transition-colors ${
+                      fontSize === size
+                        ? "bg-white/10 text-zinc-100"
+                        : "text-zinc-500 hover:text-zinc-300"
+                    }`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
             </div>
           ) : lyricBusy ? (
             <div className="flex items-center gap-2.5 rounded-lg border border-white/10 bg-white/[0.04] px-4 py-3 text-sm text-zinc-300">
@@ -512,15 +581,24 @@ export default function ChordSheetPage() {
             </div>
           ) : null}
 
-          {/* Lyrics with chords */}
+          {/* Lyrics with chords — Ultimate Guitar style */}
           {hasLyrics ? (
-            <div className="overflow-x-auto rounded-xl border border-white/10 bg-white/[0.025] px-4 py-5 sm:px-6">
+            <div className="overflow-x-auto rounded-xl border border-white/10 bg-white/[0.025] px-4 py-5 sm:px-6" style={{ "--chord-sheet-fs": `${fontSize}px` }}>
               <div className="flex flex-col">
-                {lyricRows.map((row) => (
-                  <LyricRow key={row.index} row={row} />
+                {buildSections(lyricRows).map((section, si) => (
+                  <div key={si}>
+                    <p className={`mb-3 font-mono text-[13px] font-bold text-teal-300${si > 0 ? " mt-7" : ""}`}>
+                      [{section.label}]
+                    </p>
+                    {section.rows.map((row) =>
+                      row.instrumental
+                        ? <InstrumentalRow key={row.index} row={row} />
+                        : <VocalRow key={row.index} row={row} />
+                    )}
+                  </div>
                 ))}
               </div>
-              <div className="mt-5 flex flex-wrap items-center gap-5 border-t border-white/[0.07] pt-4 text-[11.5px] text-zinc-500">
+              <div className="mt-6 flex flex-wrap items-center gap-5 border-t border-white/[0.07] pt-4 text-[11.5px] text-zinc-500">
                 <span className="inline-flex items-center gap-2">
                   <span className="font-mono text-teal-300">Bb</span> confident
                 </span>

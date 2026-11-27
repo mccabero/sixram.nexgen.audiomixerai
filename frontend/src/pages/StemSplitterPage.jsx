@@ -6,11 +6,12 @@ import {
   Loader2,
   Music4,
   RotateCcw,
+  Search,
   ServerOff,
   SlidersHorizontal,
   Trash2,
   TriangleAlert,
-  X
+  X,
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
@@ -41,10 +42,6 @@ const ACTIVE_BATCH_STATUSES = new Set(["Pending", "Fetching", "Splitting"]);
 const hasPlaylistId = (value) => /[?&]list=/.test(value);
 const isPlaylistPage = (value) => /\/playlist\?/.test(value);
 
-const STEM_SETS = [
-  { value: "6", label: "6 stems", detail: "Vocals · Drums · Bass · Guitar · Piano · Other" },
-  { value: "4", label: "4 stems", detail: "Vocals · Drums · Bass · Other — faster, cleaner" },
-];
 
 function formatDuration(seconds) {
   if (!seconds) return "--:--";
@@ -76,12 +73,14 @@ export default function StemSplitterPage() {
   const navigate = useNavigate();
   const [splits, setSplits] = useState([]);
   const [batches, setBatches] = useState([]);
+  const [activeTab, setActiveTab] = useState("split");
+  const [splitSearch, setSplitSearch] = useState("");
   const [batchMode, setBatchMode] = useState(false);
   const [batchBusy, setBatchBusy] = useState("");
   const [environment, setEnvironment] = useState(null);
   const [url, setUrl] = useState("");
-  const [stemSet, setStemSet] = useState("6");
-  const [deep, setDeep] = useState(true);
+  const stemSet = "6";
+  const deep = true;
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
@@ -168,6 +167,7 @@ export default function StemSplitterPage() {
         await createSplitBatch({ url: url.trim(), stemSet, depth });
         setUrl("");
         await Promise.all([load(), loadBatches()]);
+        setActiveTab("batches");
         return;
       }
 
@@ -250,12 +250,12 @@ export default function StemSplitterPage() {
 
   return (
     <div className="flex flex-col gap-5">
+      {/* Page header */}
       <div>
         <p className="text-xs font-semibold uppercase tracking-[0.16em] text-teal-100/75">Standalone module</p>
         <h1 className="mt-1.5 text-3xl font-semibold text-white">Stem Splitter</h1>
         <p className="mt-1.5 max-w-3xl text-sm leading-6 text-zinc-400">
-          Paste a link and split the song into isolated instrument tracks you can mute and play over. This is separate
-          from your mix and mastering projects and never touches them.
+          Paste a link and split the song into isolated instrument tracks you can mute and play over.
         </p>
       </div>
 
@@ -276,126 +276,6 @@ export default function StemSplitterPage() {
         </div>
       ) : null}
 
-      <form
-        onSubmit={onSubmit}
-        className="flex flex-col gap-4 rounded-xl border border-white/10 bg-white/[0.035] px-6 py-5"
-      >
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
-          <div className="flex min-w-0 flex-grow flex-col gap-2">
-            <label htmlFor="split-url" className="text-xs font-semibold uppercase tracking-[0.14em] text-teal-100/75">
-              Source URL
-            </label>
-            <div className="flex h-[52px] items-center gap-2.5 rounded-lg border border-teal-300/35 bg-black/45 px-3.5">
-              <Link2 size={19} className="shrink-0 text-teal-300" />
-              <input
-                id="split-url"
-                type="url"
-                required
-                value={url}
-                onChange={(event) => setUrl(event.target.value)}
-                placeholder="https://www.youtube.com/watch?v=..."
-                className="h-full min-w-0 flex-grow border-0 bg-transparent text-[15px] text-zinc-100 outline-none placeholder:text-zinc-600"
-              />
-            </div>
-          </div>
-          <Button type="submit" disabled={submitting || !url.trim()} className="h-[52px] px-7 text-[15px]">
-            {submitting ? <Loader2 size={17} className="animate-spin" /> : <AudioLines size={17} />}
-            {submitting ? "Starting..." : "Split stems"}
-          </Button>
-        </div>
-
-        <fieldset className="flex flex-col gap-2">
-          <legend className="text-xs font-semibold uppercase tracking-[0.14em] text-zinc-400">Stem set</legend>
-          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-            {STEM_SETS.map((option) => (
-              <label
-                key={option.value}
-                className={`flex min-h-11 cursor-pointer items-center gap-2.5 rounded-lg border px-4 py-2 transition ${
-                  stemSet === option.value
-                    ? "border-teal-300/55 bg-teal-300/[0.14]"
-                    : "border-white/12 bg-white/[0.04] hover:border-white/20"
-                }`}
-              >
-                <input
-                  type="radio"
-                  name="stemSet"
-                  value={option.value}
-                  checked={stemSet === option.value}
-                  onChange={() => setStemSet(option.value)}
-                  className="accent-teal-300"
-                />
-                <span>
-                  <span className={`block text-[13px] font-semibold ${stemSet === option.value ? "text-teal-100" : "text-zinc-300"}`}>
-                    {option.label}
-                  </span>
-                  <span className="block text-[11px] text-zinc-500">{option.detail}</span>
-                </span>
-              </label>
-            ))}
-          </div>
-        </fieldset>
-
-        <label
-          className={`flex items-start gap-3 rounded-lg border px-4 py-3 transition ${
-            stemSet !== "6"
-              ? "cursor-not-allowed border-white/[0.06] bg-white/[0.015] opacity-50"
-              : deep
-                ? "cursor-pointer border-teal-300/45 bg-teal-300/[0.10]"
-                : "cursor-pointer border-white/12 bg-white/[0.04] hover:border-white/20"
-          }`}
-        >
-          <input
-            type="checkbox"
-            checked={deep && stemSet === "6"}
-            disabled={stemSet !== "6"}
-            onChange={(event) => setDeep(event.target.checked)}
-            className="mt-0.5 h-4 w-4 accent-teal-300"
-          />
-          <span className="min-w-0">
-            <span className="block text-[13px] font-semibold text-zinc-200">
-              Deep split &mdash; better guitar and piano
-            </span>
-            <span className="mt-0.5 block text-[12px] leading-5 text-zinc-500">
-              Separates 4 stems first, then pulls guitar and piano out of what is left instead of out of the full mix.
-              Roughly doubles the time. Only applies to the 6-stem set.
-            </span>
-          </span>
-        </label>
-
-        {hasPlaylistId(url) ? (
-          <label
-            className={`flex items-start gap-3 rounded-lg border px-4 py-3 transition ${
-              batchMode
-                ? "cursor-pointer border-teal-300/45 bg-teal-300/[0.10]"
-                : "cursor-pointer border-white/12 bg-white/[0.04] hover:border-white/20"
-            }`}
-          >
-            <input
-              type="checkbox"
-              checked={batchMode}
-              onChange={(event) => setBatchMode(event.target.checked)}
-              className="mt-0.5 h-4 w-4 accent-teal-300"
-            />
-            <span className="min-w-0">
-              <span className="block text-[13px] font-semibold text-zinc-200">
-                Split every track in this playlist
-              </span>
-              <span className="mt-0.5 block text-[12px] leading-5 text-zinc-500">
-                Downloads every track first, then separates them one at a time. You can close the page and resume later.
-              </span>
-            </span>
-          </label>
-        ) : null}
-
-        <div className="flex items-start gap-2.5 rounded-lg border border-amber-300/25 bg-amber-300/[0.07] px-3.5 py-2.5">
-          <Clock3 size={16} className="mt-0.5 shrink-0 text-amber-300" />
-          <p className="text-[13px] leading-6 text-amber-100/90">
-            Separation runs on the CPU, so expect several minutes per song and one split at a time. You can leave this
-            page while it works.
-          </p>
-        </div>
-      </form>
-
       {error ? (
         <div className="flex items-center gap-2.5 rounded-lg border border-rose-300/30 bg-rose-400/10 px-4 py-3 text-sm text-rose-100">
           <TriangleAlert size={16} className="shrink-0" />
@@ -403,195 +283,318 @@ export default function StemSplitterPage() {
         </div>
       ) : null}
 
-      {batches.length ? (
-        <section className="flex flex-col gap-3">
-          <h2 className="text-[15px] font-semibold text-white">Playlist batches</h2>
-          {batches.map((batch) => {
-            const active = ACTIVE_BATCH_STATUSES.has(batch.status);
-            const done = batch.items.filter((item) => item.splitStatus === "Ready").length;
-            const fetched = batch.items.filter((item) => item.fetchStatus === "Fetched").length;
-            const busy = batchBusy === batch.id;
-            return (
-              <div key={batch.id} className="rounded-xl border border-white/10 bg-white/[0.03] px-5 py-4">
-                <div className="flex flex-wrap items-start gap-4">
-                  <div className="min-w-0 flex-grow">
-                    <div className="flex flex-wrap items-center gap-2.5">
-                      <ListMusic size={16} className="shrink-0 text-teal-300" />
-                      <span className="truncate text-[15px] font-semibold text-zinc-100">{batch.title}</span>
-                      <span className="rounded-full border border-white/12 bg-black/30 px-2.5 py-0.5 text-[11px] font-semibold text-zinc-300">
-                        {batch.status}
-                      </span>
-                    </div>
-                    <p className="mt-1 text-[13px] text-zinc-400">
-                      {batch.progressMessage || `${batch.items.length} tracks`}
-                    </p>
-                    <p className="mt-1 text-[12px] text-zinc-500">
-                      {fetched} of {batch.items.length} downloaded &middot; {done} separated &middot; {batch.modelName}
-                    </p>
-                  </div>
-                  <div className="flex shrink-0 flex-wrap gap-2">
-                    {active ? (
-                      <Button type="button" variant="secondary" disabled={busy} onClick={() => runBatchAction(batch.id, cancelSplitBatch)}>
-                        Cancel
-                      </Button>
-                    ) : (
-                      <>
-                        {done < batch.items.length ? (
-                          <Button type="button" variant="secondary" disabled={busy} onClick={() => runBatchAction(batch.id, resumeSplitBatch)}>
-                            Resume
+      {/* Tab switcher */}
+      <div className="flex items-center gap-1 self-start rounded-xl border border-white/10 bg-white/[0.04] p-1">
+        <button
+          type="button"
+          onClick={() => setActiveTab("split")}
+          className={`min-h-8 rounded-lg px-4 py-1.5 text-[13px] font-bold transition ${
+            activeTab === "split" ? "bg-teal-300/[0.14] text-teal-100" : "text-zinc-400 hover:text-white"
+          }`}
+        >
+          Split
+        </button>
+        <button
+          type="button"
+          onClick={() => setActiveTab("batches")}
+          className={`inline-flex items-center gap-2 min-h-8 rounded-lg px-4 py-1.5 text-[13px] font-bold transition ${
+            activeTab === "batches" ? "bg-teal-300/[0.14] text-teal-100" : "text-zinc-400 hover:text-white"
+          }`}
+        >
+          Playlist Batches
+          {batches.length > 0 ? (
+            <span className="rounded-full bg-white/[0.12] px-1.5 py-0.5 text-[10px] font-semibold tabular-nums">
+              {batches.length}
+            </span>
+          ) : null}
+        </button>
+      </div>
+
+      {/* ── Split tab ─────────────────────────────────────────────── */}
+      {activeTab === "split" ? (
+        <>
+          <form
+            onSubmit={onSubmit}
+            className="flex flex-col gap-4 rounded-xl border border-white/10 bg-white/[0.035] px-6 py-5"
+          >
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
+              <div className="flex min-w-0 flex-grow flex-col gap-2">
+                <label htmlFor="split-url" className="text-xs font-semibold uppercase tracking-[0.14em] text-teal-100/75">
+                  Source URL
+                </label>
+                <div className="flex h-[52px] items-center gap-2.5 rounded-lg border border-teal-300/35 bg-black/45 px-3.5">
+                  <Link2 size={19} className="shrink-0 text-teal-300" />
+                  <input
+                    id="split-url"
+                    type="url"
+                    required
+                    value={url}
+                    onChange={(event) => setUrl(event.target.value)}
+                    placeholder="https://www.youtube.com/watch?v=..."
+                    className="h-full min-w-0 flex-grow border-0 bg-transparent text-[15px] text-zinc-100 outline-none placeholder:text-zinc-600"
+                  />
+                </div>
+              </div>
+              <Button type="submit" disabled={submitting || !url.trim()} className="h-[52px] px-7 text-[15px]">
+                {submitting ? <Loader2 size={17} className="animate-spin" /> : <AudioLines size={17} />}
+                {submitting ? "Starting..." : "Split stems"}
+              </Button>
+            </div>
+
+            {hasPlaylistId(url) ? (
+              <label
+                className={`flex items-start gap-3 rounded-lg border px-4 py-3 transition ${
+                  batchMode
+                    ? "cursor-pointer border-teal-300/45 bg-teal-300/[0.10]"
+                    : "cursor-pointer border-white/12 bg-white/[0.04] hover:border-white/20"
+                }`}
+              >
+                <input
+                  type="checkbox"
+                  checked={batchMode}
+                  onChange={(event) => setBatchMode(event.target.checked)}
+                  className="mt-0.5 h-4 w-4 accent-teal-300"
+                />
+                <span className="min-w-0">
+                  <span className="block text-[13px] font-semibold text-zinc-200">
+                    Split every track in this playlist
+                  </span>
+                  <span className="mt-0.5 block text-[12px] leading-5 text-zinc-500">
+                    Downloads every track first, then separates them one at a time. You can close the page and resume later.
+                  </span>
+                </span>
+              </label>
+            ) : null}
+
+            <div className="flex items-start gap-2.5 rounded-lg border border-amber-300/25 bg-amber-300/[0.07] px-3.5 py-2.5">
+              <Clock3 size={16} className="mt-0.5 shrink-0 text-amber-300" />
+              <p className="text-[13px] leading-6 text-amber-100/90">
+                Separation runs on the CPU, so expect several minutes per song and one split at a time. You can leave this
+                page while it works.
+              </p>
+            </div>
+          </form>
+
+          <section className="flex flex-col gap-3">
+            {splits.length > 0 ? (
+              <label className="relative block">
+                <Search size={15} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500" />
+                <input
+                  value={splitSearch}
+                  onChange={(e) => setSplitSearch(e.target.value)}
+                  placeholder="Search splits…"
+                  className="min-h-10 w-full rounded-lg border border-white/10 bg-black/25 py-2 pl-9 pr-3 text-sm text-white placeholder:text-zinc-600 focus:border-teal-300/40 focus:outline-none"
+                  aria-label="Search splits"
+                />
+              </label>
+            ) : null}
+            {loading ? (
+              <p className="text-sm text-zinc-500">Loading...</p>
+            ) : splits.length === 0 ? (
+              <div className="rounded-xl border border-dashed border-white/12 bg-white/[0.02] px-6 py-10 text-center">
+                <SlidersHorizontal size={26} className="mx-auto text-zinc-600" />
+                <p className="mt-3 text-sm font-semibold text-zinc-300">No splits yet</p>
+                <p className="mt-1 text-[13px] text-zinc-500">Paste a link above to separate your first song.</p>
+              </div>
+            ) : (() => {
+              const q = splitSearch.trim().toLowerCase();
+              const visible = q ? splits.filter((s) => s.title?.toLowerCase().includes(q)) : splits;
+              if (!visible.length) return (
+                <div className="rounded-xl border border-dashed border-white/12 bg-white/[0.02] px-6 py-10 text-center">
+                  <SlidersHorizontal size={26} className="mx-auto text-zinc-600" />
+                  <p className="mt-3 text-sm font-semibold text-zinc-300">No matches</p>
+                  <p className="mt-1 text-[13px] text-zinc-500">Try a different search term.</p>
+                </div>
+              );
+              return visible.map((split) => {
+                const active = ACTIVE_STATUSES.has(split.status);
+                const progress = split.job?.progress ?? 0;
+
+                return (
+                  <div key={split.id} className="rounded-xl border border-white/10 bg-white/[0.03] px-5 py-4">
+                    <div className="flex flex-wrap items-center gap-4">
+                      <div className="min-w-0 flex-grow">
+                        <div className="flex items-center gap-2.5">
+                          <h3 className="truncate text-[15px] font-semibold text-zinc-100">{split.title}</h3>
+                          <StatusPill split={split} />
+                        </div>
+                        <p className="mt-1 truncate text-[12px] text-zinc-500">
+                          {formatDuration(split.durationSeconds)} · {split.stemSet} stems ·{" "}
+                          {split.depth === "deep" ? "deep · " : ""}
+                          {split.modelName}
+                          {split.completedAt ? ` · ${formatDateTime(split.completedAt)}` : ""}
+                          {split.elapsedSeconds ? ` · took ${(split.elapsedSeconds / 60).toFixed(1)} min` : ""}
+                        </p>
+                      </div>
+
+                      <div className="flex shrink-0 flex-wrap items-center gap-2">
+                        {split.status === "Ready" ? (
+                          <Button
+                            type="button"
+                            variant="secondary"
+                            disabled={chordBusy === split.id}
+                            onClick={() => onChordSheet(split)}
+                          >
+                            {chordBusy === split.id ? <Loader2 size={15} className="animate-spin" /> : <Music4 size={15} />}
+                            {sheetsBySplit[split.id] ? "Open chord sheet" : "Chord sheet"}
                           </Button>
                         ) : null}
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          disabled={busy}
-                          onClick={() => {
-                            if (!window.confirm("Remove this batch from the list? The splits themselves are kept.")) return;
-                            runBatchAction(batch.id, (id) => deleteSplitBatch(id, false));
-                          }}
-                        >
-                          Remove
-                        </Button>
-                      </>
-                    )}
-                  </div>
-                </div>
+                        {split.status === "Ready" ? (
+                          <Button as={Link} to={`/stem-splitter/${split.id}`} variant="secondary">
+                            Open player
+                          </Button>
+                        ) : null}
+                        {!active && (split.status === "Failed" || split.status === "Cancelled") ? (
+                          <Button type="button" variant="secondary" onClick={() => onRetry(split.id)}>
+                            <RotateCcw size={15} />
+                            Retry
+                          </Button>
+                        ) : null}
+                        {active ? (
+                          <Button type="button" variant="danger" onClick={() => onCancel(split.id)}>
+                            <X size={15} />
+                            Cancel
+                          </Button>
+                        ) : (
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            onClick={() => onDelete(split.id)}
+                            aria-label={`Delete split ${split.title}`}
+                          >
+                            <Trash2 size={15} />
+                          </Button>
+                        )}
+                      </div>
+                    </div>
 
-                <ol className="mt-3 flex flex-col gap-1 border-t border-white/[0.07] pt-3">
-                  {batch.items.map((item, index) => (
-                    <li key={item.splitId} className="flex items-center gap-3 text-[12px]">
-                      <span className="w-5 shrink-0 text-right text-zinc-600">{index + 1}</span>
-                      <span className="min-w-0 flex-grow truncate text-zinc-300">{item.title}</span>
-                      <span className="shrink-0 text-zinc-500">{formatDuration(item.durationSeconds)}</span>
-                      <span
-                        className={`w-28 shrink-0 text-right font-semibold ${
-                          item.splitStatus === "Ready"
-                            ? item.reused
-                              ? "text-zinc-400"
-                              : "text-teal-200"
-                            : item.fetchStatus === "Failed" || item.splitStatus === "Failed"
-                              ? "text-rose-200"
-                              : "text-zinc-500"
-                        }`}
-                        title={item.fetchError || item.splitError || (item.reused ? "Already split; reused what is on disk." : "")}
-                      >
-                        {item.fetchStatus === "Failed"
-                          ? "No audio"
-                          : item.splitStatus === "Ready"
-                            ? item.reused
-                              ? "Already split"
-                              : "Split"
-                            : item.splitStatus === "Separating"
-                              ? "Separating"
-                              : item.fetchStatus === "Fetched"
-                                ? "Queued"
-                                : item.fetchStatus}
-                      </span>
-                    </li>
-                  ))}
-                </ol>
-              </div>
-            );
-          })}
-        </section>
+                    {active ? (
+                      <div className="mt-3.5 flex flex-col gap-1.5">
+                        <div className="h-2 overflow-hidden rounded-full bg-white/[0.07]">
+                          <div
+                            className="h-full rounded-full bg-gradient-to-r from-teal-500 to-teal-300 transition-[width] duration-500"
+                            style={{ width: `${progress}%` }}
+                          />
+                        </div>
+                        <p className="text-[12px] text-zinc-500">{split.job?.message}</p>
+                      </div>
+                    ) : null}
+
+                    {split.status === "Failed" && split.error ? (
+                      <p className="mt-3 rounded-lg border border-rose-300/25 bg-rose-400/[0.08] px-3 py-2 text-[12px] text-rose-100">
+                        {split.error}
+                      </p>
+                    ) : null}
+                  </div>
+                );
+              });
+            })()}
+          </section>
+        </>
       ) : null}
 
-      <section className="flex flex-col gap-3">
-        <h2 className="text-[15px] font-semibold text-white">Splits</h2>
-
-        {loading ? (
-          <p className="text-sm text-zinc-500">Loading...</p>
-        ) : splits.length === 0 ? (
-          <div className="rounded-xl border border-dashed border-white/12 bg-white/[0.02] px-6 py-10 text-center">
-            <SlidersHorizontal size={26} className="mx-auto text-zinc-600" />
-            <p className="mt-3 text-sm font-semibold text-zinc-300">No splits yet</p>
-            <p className="mt-1 text-[13px] text-zinc-500">Paste a link above to separate your first song.</p>
-          </div>
-        ) : (
-          splits.map((split) => {
-            const active = ACTIVE_STATUSES.has(split.status);
-            const progress = split.job?.progress ?? 0;
-
-            return (
-              <div key={split.id} className="rounded-xl border border-white/10 bg-white/[0.03] px-5 py-4">
-                <div className="flex flex-wrap items-center gap-4">
-                  <div className="min-w-0 flex-grow">
-                    <div className="flex items-center gap-2.5">
-                      <h3 className="truncate text-[15px] font-semibold text-zinc-100">{split.title}</h3>
-                      <StatusPill split={split} />
+      {/* ── Playlist Batches tab ──────────────────────────────────── */}
+      {activeTab === "batches" ? (
+        <section className="flex flex-col gap-3">
+          {batches.length === 0 ? (
+            <div className="rounded-xl border border-dashed border-white/12 bg-white/[0.02] px-6 py-10 text-center">
+              <ListMusic size={26} className="mx-auto text-zinc-600" />
+              <p className="mt-3 text-sm font-semibold text-zinc-300">No playlist batches yet</p>
+              <p className="mt-1 text-[13px] text-zinc-500">
+                Paste a playlist link in the Split tab to queue a whole playlist.
+              </p>
+            </div>
+          ) : (
+            batches.map((batch) => {
+              const active = ACTIVE_BATCH_STATUSES.has(batch.status);
+              const done = batch.items.filter((item) => item.splitStatus === "Ready").length;
+              const fetched = batch.items.filter((item) => item.fetchStatus === "Fetched").length;
+              const busy = batchBusy === batch.id;
+              return (
+                <div key={batch.id} className="rounded-xl border border-white/10 bg-white/[0.03] px-5 py-4">
+                  <div className="flex flex-wrap items-start gap-4">
+                    <div className="min-w-0 flex-grow">
+                      <div className="flex flex-wrap items-center gap-2.5">
+                        <ListMusic size={16} className="shrink-0 text-teal-300" />
+                        <span className="truncate text-[15px] font-semibold text-zinc-100">{batch.title}</span>
+                        <span className="rounded-full border border-white/12 bg-black/30 px-2.5 py-0.5 text-[11px] font-semibold text-zinc-300">
+                          {batch.status}
+                        </span>
+                      </div>
+                      <p className="mt-1 text-[13px] text-zinc-400">
+                        {batch.progressMessage || `${batch.items.length} tracks`}
+                      </p>
+                      <p className="mt-1 text-[12px] text-zinc-500">
+                        {fetched} of {batch.items.length} downloaded &middot; {done} separated &middot; {batch.modelName}
+                      </p>
                     </div>
-                    <p className="mt-1 truncate text-[12px] text-zinc-500">
-                      {formatDuration(split.durationSeconds)} · {split.stemSet} stems ·{" "}
-                      {split.depth === "deep" ? "deep · " : ""}
-                      {split.modelName}
-                      {split.completedAt ? ` · ${formatDateTime(split.completedAt)}` : ""}
-                      {split.elapsedSeconds ? ` · took ${(split.elapsedSeconds / 60).toFixed(1)} min` : ""}
-                    </p>
+                    <div className="flex shrink-0 flex-wrap gap-2">
+                      {active ? (
+                        <Button type="button" variant="secondary" disabled={busy} onClick={() => runBatchAction(batch.id, cancelSplitBatch)}>
+                          Cancel
+                        </Button>
+                      ) : (
+                        <>
+                          {done < batch.items.length ? (
+                            <Button type="button" variant="secondary" disabled={busy} onClick={() => runBatchAction(batch.id, resumeSplitBatch)}>
+                              Resume
+                            </Button>
+                          ) : null}
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            disabled={busy}
+                            onClick={() => {
+                              if (!window.confirm("Remove this batch from the list? The splits themselves are kept.")) return;
+                              runBatchAction(batch.id, (id) => deleteSplitBatch(id, false));
+                            }}
+                          >
+                            Remove
+                          </Button>
+                        </>
+                      )}
+                    </div>
                   </div>
 
-                  <div className="flex shrink-0 items-center gap-2">
-                    {split.status === "Ready" ? (
-                      <Button
-                        type="button"
-                        variant="secondary"
-                        disabled={chordBusy === split.id}
-                        onClick={() => onChordSheet(split)}
-                      >
-                        {chordBusy === split.id ? <Loader2 size={15} className="animate-spin" /> : <Music4 size={15} />}
-                        {sheetsBySplit[split.id] ? "Open chord sheet" : "Chord sheet"}
-                      </Button>
-                    ) : null}
-                    {split.status === "Ready" ? (
-                      <Button as={Link} to={`/stem-splitter/${split.id}`} variant="secondary">
-                        Open player
-                      </Button>
-                    ) : null}
-                    {!active && (split.status === "Failed" || split.status === "Cancelled") ? (
-                      <Button type="button" variant="secondary" onClick={() => onRetry(split.id)}>
-                        <RotateCcw size={15} />
-                        Retry
-                      </Button>
-                    ) : null}
-                    {active ? (
-                      <Button type="button" variant="danger" onClick={() => onCancel(split.id)}>
-                        <X size={15} />
-                        Cancel
-                      </Button>
-                    ) : (
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        onClick={() => onDelete(split.id)}
-                        aria-label={`Delete split ${split.title}`}
-                      >
-                        <Trash2 size={15} />
-                      </Button>
-                    )}
-                  </div>
+                  <ol className="mt-3 flex flex-col gap-1 border-t border-white/[0.07] pt-3">
+                    {batch.items.map((item, index) => (
+                      <li key={item.splitId} className="flex items-center gap-3 text-[12px]">
+                        <span className="w-5 shrink-0 text-right text-zinc-600">{index + 1}</span>
+                        <span className="min-w-0 flex-grow truncate text-zinc-300">{item.title}</span>
+                        <span className="shrink-0 text-zinc-500">{formatDuration(item.durationSeconds)}</span>
+                        <span
+                          className={`w-28 shrink-0 text-right font-semibold ${
+                            item.splitStatus === "Ready"
+                              ? item.reused
+                                ? "text-zinc-400"
+                                : "text-teal-200"
+                              : item.fetchStatus === "Failed" || item.splitStatus === "Failed"
+                                ? "text-rose-200"
+                                : "text-zinc-500"
+                          }`}
+                          title={item.fetchError || item.splitError || (item.reused ? "Already split; reused what is on disk." : "")}
+                        >
+                          {item.fetchStatus === "Failed"
+                            ? "No audio"
+                            : item.splitStatus === "Ready"
+                              ? item.reused
+                                ? "Already split"
+                                : "Split"
+                              : item.splitStatus === "Separating"
+                                ? "Separating"
+                                : item.fetchStatus === "Fetched"
+                                  ? "Queued"
+                                  : item.fetchStatus}
+                        </span>
+                      </li>
+                    ))}
+                  </ol>
                 </div>
-
-                {active ? (
-                  <div className="mt-3.5 flex flex-col gap-1.5">
-                    <div className="h-2 overflow-hidden rounded-full bg-white/[0.07]">
-                      <div
-                        className="h-full rounded-full bg-gradient-to-r from-teal-500 to-teal-300 transition-[width] duration-500"
-                        style={{ width: `${progress}%` }}
-                      />
-                    </div>
-                    <p className="text-[12px] text-zinc-500">{split.job?.message}</p>
-                  </div>
-                ) : null}
-
-                {split.status === "Failed" && split.error ? (
-                  <p className="mt-3 rounded-lg border border-rose-300/25 bg-rose-400/[0.08] px-3 py-2 text-[12px] text-rose-100">
-                    {split.error}
-                  </p>
-                ) : null}
-              </div>
-            );
-          })
-        )}
-      </section>
+              );
+            })
+          )}
+        </section>
+      ) : null}
     </div>
   );
 }
