@@ -1,7 +1,13 @@
 import { ArrowLeft, Download, Loader2, Maximize2, Mic2, Music4, Pause, Play, RotateCcw, TriangleAlert, Volume2, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { exportSplitMix, getSplit } from "../api.js";
+import {
+  exportSplitMix,
+  getChordSheetAnalysis,
+  getSplit,
+  listChordSheets,
+  updateLyricsOffset,
+} from "../api.js";
 import Button from "../components/Button.jsx";
 import KaraokeView from "../components/KaraokeView.jsx";
 import StemChannelStrip from "../components/StemChannelStrip.jsx";
@@ -386,7 +392,13 @@ export default function StemPlayerPage() {
           </div>
 
           <div className="flex shrink-0 flex-wrap items-center gap-3 border-t border-white/10 px-3 py-3 sm:px-5">
-            <Button type="button" onClick={togglePlay} disabled={!ready} className="min-h-11 px-4">
+            <Button
+              type="button"
+              onClick={togglePlay}
+              disabled={!ready}
+              className="min-h-11 px-4"
+              aria-label={playing ? "Pause" : "Play"}
+            >
               {playing ? <Pause size={17} /> : <Play size={17} />}
             </Button>
             <span className="font-mono text-xs text-zinc-400">
