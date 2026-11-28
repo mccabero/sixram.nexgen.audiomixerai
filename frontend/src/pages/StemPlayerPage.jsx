@@ -2,6 +2,7 @@ import { ArrowLeft, Download, Loader2, Maximize2, Mic2, Music4, Pause, Play, Rot
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import {
+  attachChordSheetLyrics,
   exportSplitMix,
   getChordSheetAnalysis,
   getSplit,
@@ -53,6 +54,10 @@ export default function StemPlayerPage() {
   const [lyricOffset, setLyricOffset] = useState(0);
   const [karaokeScale, setKaraokeScale] = useState(1);
   const [showChords, setShowChords] = useState(true);
+  const [sheetsLoaded, setSheetsLoaded] = useState(false);
+  const [findingLyrics, setFindingLyrics] = useState(false);
+  const [lyricsNotice, setLyricsNotice] = useState("");
+  const enterKaraokeRef = useRef(null);
   const karaokeRef = useRef(null);
   const preKaraokeChannels = useRef(null);
 
@@ -126,7 +131,11 @@ export default function StemPlayerPage() {
 
     listChordSheets()
       .then((sheets) => {
-        const match = sheets.find((row) => row.splitId === split.id && row.lyricLineCount > 0);
+        // Any Ready sheet for this split will do - one without lyrics is the
+        // case this page now fixes itself, so it must not be filtered out.
+        // Failed sheets are skipped, and one that already has lyrics wins.
+        const candidates = sheets.filter((row) => row.splitId === split.id && row.status === "Ready");
+        const match = candidates.find((row) => row.lyricLineCount > 0) || candidates[0];
         if (cancelled || !match) return null;
         setSheet(match);
         setLyricOffset(match.lyricsOffsetSeconds || 0);
@@ -136,7 +145,10 @@ export default function StemPlayerPage() {
         if (!cancelled && analysis) setLyricRows(analysis.lyricRows || []);
       })
       .catch(() => {
-        // No sheet, or it failed to load: karaoke simply is not offered.
+        // No sheet, or it failed to load. The button says which.
+      })
+      .finally(() => {
+        if (!cancelled) setSheetsLoaded(true);
       });
 
     return () => {
@@ -144,9 +156,59 @@ export default function StemPlayerPage() {
     };
   }, [split?.id]);
 
+  // Four different situations used to look identical - the button simply was
+  // not there - so the state is named and the button says which one it is in.
   const hasTimedLyrics = Boolean(
     lyricRows && lyricRows.some((row) => typeof row.startSeconds === "number" && !row.instrumental),
   );
+  const hasWords = Boolean(lyricRows && lyricRows.some((row) => row.text));
+
+  const karaokeState = !sheetsLoaded
+    ? "loading"
+    : !sheet
+      ? "needsSheet"
+      : hasTimedLyrics
+        ? "ready"
+        : hasWords
+          ? "untimed"
+          : "needsLyrics";
+
+  const karaokeLabel = {
+    loading: "Karaoke",
+    ready: "Karaoke",
+    needsLyrics: findingLyrics ? "Finding lyrics..." : "Karaoke",
+    untimed: "Lyrics not timed",
+    needsSheet: "Karaoke needs a chord sheet",
+  }[karaokeState];
+
+  const karaokeHint = {
+    untimed: "Lyrics were found but carry no timings, so there is nothing to follow. Paste an LRC version on the chord sheet to fix it.",
+    needsSheet: "Karaoke reads the timed lyrics from this song's chord sheet. Make one from the Stem Splitter page first.",
+  }[karaokeState];
+
+  // When a sheet exists but nobody ever opened it, its lyrics were never
+  // looked up. Do it from here rather than sending the singer away.
+  const findLyricsThenPlay = useCallback(async () => {
+    if (!sheet) return;
+    setFindingLyrics(true);
+    setLyricsNotice("");
+    try {
+      const analysis = await attachChordSheetLyrics(sheet.id, { source: "auto" });
+      const rows = analysis.lyricRows || [];
+      setLyricRows(rows);
+      if (rows.some((row) => typeof row.startSeconds === "number" && !row.instrumental)) {
+        enterKaraokeRef.current?.();
+      } else if (rows.some((row) => row.text)) {
+        setLyricsNotice("Found lyrics for this song, but without timings - nothing to follow along to.");
+      } else {
+        setLyricsNotice("No lyrics found for this song. You can paste them on its chord sheet.");
+      }
+    } catch (exc) {
+      setLyricsNotice(exc.message || "Could not look up lyrics.");
+    } finally {
+      setFindingLyrics(false);
+    }
+  }, [sheet]);
 
   // Entering karaoke mutes the vocals and remembers what was muted before,
   // so leaving puts the mix back exactly as the singer had it.
@@ -162,6 +224,10 @@ export default function StemPlayerPage() {
     setChannels(next);
     setKaraoke(true);
   }, [channels, split]);
+
+  useEffect(() => {
+    enterKaraokeRef.current = enterKaraoke;
+  }, [enterKaraoke]);
 
   const exitKaraoke = useCallback(() => {
     const player = playerRef.current;
@@ -448,13 +514,20 @@ export default function StemPlayerPage() {
             {exporting ? <Loader2 size={15} className="animate-spin" /> : <Download size={15} />}
             {exporting ? "Rendering..." : "Export custom mix"}
           </Button>
-          {hasTimedLyrics ? (
-            <Button type="button" onClick={enterKaraoke} disabled={!ready}>
-              <Mic2 size={15} />
-              Karaoke
-            </Button>
-          ) : null}
+          <Button
+            type="button"
+            variant={karaokeState === "ready" ? "primary" : "secondary"}
+            onClick={karaokeState === "ready" ? enterKaraoke : findLyricsThenPlay}
+            disabled={!ready || findingLyrics || karaokeState === "loading" || karaokeState === "untimed" || karaokeState === "needsSheet"}
+            title={karaokeHint || ""}
+          >
+            {findingLyrics ? <Loader2 size={15} className="animate-spin" /> : <Mic2 size={15} />}
+            {karaokeLabel}
+          </Button>
         </div>
+        {karaokeHint || lyricsNotice ? (
+          <p className="max-w-xl text-[12px] leading-5 text-zinc-500">{lyricsNotice || karaokeHint}</p>
+        ) : null}
       </div>
 
 
