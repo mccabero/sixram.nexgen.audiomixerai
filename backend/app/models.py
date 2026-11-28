@@ -1077,6 +1077,10 @@ class ChordSheet(BaseModel):
     lyricsSource: str | None = None
     lyricsSynced: bool = False
     lyricLineCount: int = 0
+    # LRC timings are made against a particular release. The audio here comes
+    # from YouTube, which may be a different master or edit, so the whole lyric
+    # track can sit a little early or late. This is that correction, in seconds.
+    lyricsOffsetSeconds: float = 0.0
     job: ChordSheetJob | None = None
 
 
@@ -1093,6 +1097,12 @@ class UpdateSheetViewRequest(BaseModel):
     transpose: int = 0
     capo: int = 0
     tuningShift: int = 0
+
+
+class UpdateLyricsOffsetRequest(BaseModel):
+    """Shift every lyric line against the audio, to taste."""
+
+    offsetSeconds: float = Field(default=0.0, ge=-30, le=30)
 
 
 class UpdateSheetChordRequest(BaseModel):

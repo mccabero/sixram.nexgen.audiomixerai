@@ -1,10 +1,17 @@
-import { ArrowLeft, Download, Loader2, Pause, Play, RotateCcw, TriangleAlert, Volume2 } from "lucide-react";
+import { ArrowLeft, Download, Loader2, Maximize2, Mic2, Music4, Pause, Play, RotateCcw, TriangleAlert, Volume2, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { exportSplitMix, getSplit } from "../api.js";
 import Button from "../components/Button.jsx";
+import KaraokeView from "../components/KaraokeView.jsx";
 import StemChannelStrip from "../components/StemChannelStrip.jsx";
 import StemPlayer from "../utils/stemPlayback.js";
+
+// Demucs names its vocal outputs; a karaoke mix is those muted.
+const VOCAL_SOURCES = new Set(["vocals", "vocal", "lead vocal", "backing vocal"]);
+const isVocalStem = (stem) =>
+  VOCAL_SOURCES.has(String(stem.source || "").toLowerCase()) ||
+  VOCAL_SOURCES.has(String(stem.label || "").toLowerCase());
 
 function mediaUrl(path) {
   if (!path) return null;
@@ -32,6 +39,16 @@ export default function StemPlayerPage() {
   const [peaks, setPeaks] = useState({});
   const [exporting, setExporting] = useState(false);
   const [exported, setExported] = useState(null);
+
+  // --- karaoke ------------------------------------------------------------
+  const [sheet, setSheet] = useState(null);
+  const [lyricRows, setLyricRows] = useState(null);
+  const [karaoke, setKaraoke] = useState(false);
+  const [lyricOffset, setLyricOffset] = useState(0);
+  const [karaokeScale, setKaraokeScale] = useState(1);
+  const [showChords, setShowChords] = useState(true);
+  const karaokeRef = useRef(null);
+  const preKaraokeChannels = useRef(null);
 
   const playerRef = useRef(null);
   const frameRef = useRef(null);
@@ -93,6 +110,100 @@ export default function StemPlayerPage() {
     // masterVolume intentionally excluded: it is pushed imperatively below.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [split]);
+
+  // --- lyrics ---------------------------------------------------------------
+  // The chord sheet already holds timed lines and the chords placed on them,
+  // so karaoke needs no analysis of its own - just the sheet for this split.
+  useEffect(() => {
+    if (!split?.id) return undefined;
+    let cancelled = false;
+
+    listChordSheets()
+      .then((sheets) => {
+        const match = sheets.find((row) => row.splitId === split.id && row.lyricLineCount > 0);
+        if (cancelled || !match) return null;
+        setSheet(match);
+        setLyricOffset(match.lyricsOffsetSeconds || 0);
+        return getChordSheetAnalysis(match.id);
+      })
+      .then((analysis) => {
+        if (!cancelled && analysis) setLyricRows(analysis.lyricRows || []);
+      })
+      .catch(() => {
+        // No sheet, or it failed to load: karaoke simply is not offered.
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [split?.id]);
+
+  const hasTimedLyrics = Boolean(
+    lyricRows && lyricRows.some((row) => typeof row.startSeconds === "number" && !row.instrumental),
+  );
+
+  // Entering karaoke mutes the vocals and remembers what was muted before,
+  // so leaving puts the mix back exactly as the singer had it.
+  const enterKaraoke = useCallback(() => {
+    const player = playerRef.current;
+    if (!player || !split) return;
+    preKaraokeChannels.current = channels;
+    const next = { ...channels };
+    split.stems.filter(isVocalStem).forEach((stem) => {
+      next[stem.id] = { ...(next[stem.id] || { gainDb: 0 }), muted: true };
+      player.setStemMuted(stem.id, true);
+    });
+    setChannels(next);
+    setKaraoke(true);
+  }, [channels, split]);
+
+  const exitKaraoke = useCallback(() => {
+    const player = playerRef.current;
+    const restore = preKaraokeChannels.current;
+    if (player && restore) {
+      Object.entries(restore).forEach(([stemId, channel]) => {
+        player.setStemMuted(stemId, Boolean(channel.muted));
+      });
+      setChannels(restore);
+    }
+    preKaraokeChannels.current = null;
+    setKaraoke(false);
+    if (document.fullscreenElement) document.exitFullscreen?.().catch(() => {});
+  }, []);
+
+  const nudgeOffset = useCallback(
+    (delta) => {
+      setLyricOffset((current) => {
+        const next = Math.round(Math.min(30, Math.max(-30, current + delta)) * 100) / 100;
+        if (sheet) updateLyricsOffset(sheet.id, next).catch(() => {});
+        return next;
+      });
+    },
+    [sheet],
+  );
+
+  const toggleFullscreen = useCallback(() => {
+    const node = karaokeRef.current;
+    if (!node) return;
+    if (document.fullscreenElement) {
+      document.exitFullscreen?.().catch(() => {});
+    } else {
+      node.requestFullscreen?.().catch(() => {});
+    }
+  }, []);
+
+  // Space to play, arrows to nudge: the singer is not at the keyboard, but
+  // whoever is running it should not have to aim at small buttons.
+  useEffect(() => {
+    if (!karaoke) return undefined;
+    const onKeyDown = (event) => {
+      if (event.key === "Escape") exitKaraoke();
+      if (event.key === "ArrowLeft") nudgeOffset(-0.1);
+      if (event.key === "ArrowRight") nudgeOffset(0.1);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [karaoke, exitKaraoke, nudgeOffset]);
 
   // --- playhead -------------------------------------------------------------
   useEffect(() => {
@@ -238,6 +349,76 @@ export default function StemPlayerPage() {
 
   return (
     <div className="flex flex-col gap-4">
+      {karaoke ? (
+        <div ref={karaokeRef} className="fixed inset-0 z-50 flex flex-col bg-[#06070a]">
+          <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-white/10 px-3 py-2 sm:px-5 sm:py-3">
+            <span className="min-w-0 flex-grow truncate text-sm font-semibold text-zinc-200 sm:text-base">
+              {split.title}
+            </span>
+            <Button type="button" variant="ghost" onClick={() => setShowChords((c) => !c)} className="min-h-9 px-2.5">
+              <Music4 size={15} />
+              <span className="hidden sm:inline">{showChords ? "Hide chords" : "Show chords"}</span>
+            </Button>
+            <div className="flex items-center gap-1">
+              <Button type="button" variant="ghost" onClick={() => setKaraokeScale((v) => Math.max(0.6, +(v - 0.15).toFixed(2)))} className="min-h-9 px-2.5" aria-label="Smaller text">
+                A-
+              </Button>
+              <Button type="button" variant="ghost" onClick={() => setKaraokeScale((v) => Math.min(2.4, +(v + 0.15).toFixed(2)))} className="min-h-9 px-2.5" aria-label="Bigger text">
+                A+
+              </Button>
+            </div>
+            <Button type="button" variant="ghost" onClick={toggleFullscreen} className="min-h-9 px-2.5" aria-label="Fullscreen">
+              <Maximize2 size={15} />
+            </Button>
+            <Button type="button" variant="secondary" onClick={exitKaraoke} className="min-h-9 px-2.5">
+              <X size={15} />
+              <span className="hidden sm:inline">Exit</span>
+            </Button>
+          </div>
+
+          <div className="min-h-0 flex-grow">
+            <KaraokeView
+              rows={lyricRows || []}
+              currentTime={position - lyricOffset}
+              showChords={showChords}
+              scale={karaokeScale}
+            />
+          </div>
+
+          <div className="flex shrink-0 flex-wrap items-center gap-3 border-t border-white/10 px-3 py-3 sm:px-5">
+            <Button type="button" onClick={togglePlay} disabled={!ready} className="min-h-11 px-4">
+              {playing ? <Pause size={17} /> : <Play size={17} />}
+            </Button>
+            <span className="font-mono text-xs text-zinc-400">
+              {formatTime(position)} / {formatTime(duration)}
+            </span>
+            <input
+              type="range"
+              min={0}
+              max={Math.max(1, duration)}
+              step={0.1}
+              value={Math.min(position, duration || 0)}
+              onChange={onScrub}
+              aria-label="Seek"
+              className="min-w-[140px] flex-grow accent-teal-300"
+            />
+            <div className="flex items-center gap-1.5">
+              <span className="text-[11px] font-semibold uppercase tracking-wider text-zinc-500">Lyrics</span>
+              <Button type="button" variant="ghost" onClick={() => nudgeOffset(-0.1)} className="min-h-9 px-2.5" aria-label="Lyrics earlier">
+                &minus;
+              </Button>
+              <span className="w-14 text-center font-mono text-xs text-zinc-300">
+                {lyricOffset > 0 ? "+" : ""}
+                {lyricOffset.toFixed(1)}s
+              </span>
+              <Button type="button" variant="ghost" onClick={() => nudgeOffset(0.1)} className="min-h-9 px-2.5" aria-label="Lyrics later">
+                +
+              </Button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
       <div className="flex flex-col gap-2">
         <Button as={Link} to="/stem-splitter" variant="ghost" className="self-start">
           <ArrowLeft size={15} />
@@ -250,11 +431,17 @@ export default function StemPlayerPage() {
             {split.elapsedSeconds ? ` · separated in ${(split.elapsedSeconds / 60).toFixed(1)} min` : ""}
           </p>
         </div>
-        <div className="mt-1">
+        <div className="mt-1 flex flex-wrap gap-2">
           <Button type="button" variant="secondary" onClick={onExport} disabled={exporting || !ready}>
             {exporting ? <Loader2 size={15} className="animate-spin" /> : <Download size={15} />}
             {exporting ? "Rendering..." : "Export custom mix"}
           </Button>
+          {hasTimedLyrics ? (
+            <Button type="button" onClick={enterKaraoke} disabled={!ready}>
+              <Mic2 size={15} />
+              Karaoke
+            </Button>
+          ) : null}
         </div>
       </div>
 

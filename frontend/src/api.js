@@ -785,3 +785,10 @@ export function cancelSplitBatch(batchId) {
 export function deleteSplitBatch(batchId, deleteSplits = false) {
   return request(`/split-batches/${batchId}?deleteSplits=${deleteSplits}`, { method: "DELETE" });
 }
+
+export function updateLyricsOffset(sheetId, offsetSeconds) {
+  return request(`/chord-sheets/${sheetId}/lyrics-offset`, {
+    method: "PATCH",
+    body: JSON.stringify({ offsetSeconds }),
+  });
+}

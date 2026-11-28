@@ -676,6 +676,22 @@ def update_sheet_view(sheet_id: str, transpose: int, capo: int, tuning_shift: in
     return analysis
 
 
+def update_lyrics_offset(sheet_id: str, offset_seconds: float) -> ChordSheet:
+    """Nudge the lyrics against the audio.
+
+    Deliberately not part of update_sheet_view: that re-spells every chord and
+    re-derives the rows, which is far too much work for a control someone taps
+    repeatedly while a song plays.
+    """
+    if not -30 <= offset_seconds <= 30:
+        raise HTTPException(status_code=400, detail="The lyrics offset must be within 30 seconds.")
+
+    def apply(sheet: dict[str, Any]) -> None:
+        sheet["lyricsOffsetSeconds"] = round(float(offset_seconds), 2)
+
+    return ChordSheet(**_mutate_sheet(sheet_id, apply))
+
+
 def update_sheet_chord(sheet_id: str, bar: int, start_seconds: float, label: str) -> dict[str, Any]:
     """Correct one chord by hand. Edits survive a re-analysis."""
     analysis_path = sheet_subdirs(sheet_id)["analysis"] / "analysis.json"

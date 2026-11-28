@@ -16,6 +16,7 @@ from .models import (
     CreateChordSheetRequest,
     ExportChordSheetRequest,
     ExportFile,
+    UpdateLyricsOffsetRequest,
     UpdateSheetChordRequest,
     UpdateSheetViewRequest,
     ExportMixRequest,
@@ -186,6 +187,7 @@ from .chord_sheet import (
     request_sheet_cancel,
     retry_chord_sheet,
     run_chord_sheet,
+    update_lyrics_offset,
     update_sheet_chord,
     update_sheet_view,
 )
@@ -889,6 +891,11 @@ def api_delete_chord_sheet(sheet_id: str) -> dict:
 @app.patch("/api/chord-sheets/{sheet_id}/view")
 def api_update_chord_sheet_view(sheet_id: str, payload: UpdateSheetViewRequest) -> dict:
     return update_sheet_view(sheet_id, payload.transpose, payload.capo, payload.tuningShift)
+
+
+@app.patch("/api/chord-sheets/{sheet_id}/lyrics-offset", response_model=ChordSheet)
+def api_update_lyrics_offset(sheet_id: str, payload: UpdateLyricsOffsetRequest) -> ChordSheet:
+    return update_lyrics_offset(sheet_id, payload.offsetSeconds)
 
 
 @app.patch("/api/chord-sheets/{sheet_id}/chord")
